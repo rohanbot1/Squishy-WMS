@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+*.db
+.venv/
+venv/
+node_modules/
+dist/
+
+# Real customer order exports (names, addresses, phone numbers) -- keep
+# these local only, never commit them.
+/sample_data/
+
+# Every wall set's upload carries the same real buyer PII as sample_data/.
+/storage/
+
+# Holds ADMIN_PASSWORD_HASH -- never commit real credentials.
+.env
+*.tsbuildinfo

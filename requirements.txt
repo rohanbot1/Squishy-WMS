@@ -1,0 +1,10 @@
+sqlmodel
+python-barcode
+reportlab
+pymupdf
+fastapi
+uvicorn[standard]
+python-multipart
+pytest
+httpx
+python-dotenv

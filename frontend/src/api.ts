@@ -1,0 +1,266 @@
+// "localhost" here (not 127.0.0.1) has to match the hostname the frontend
+// itself is served from -- the admin session cookie is SameSite=Lax, and
+// SameSite cares about hostname, not port, so a mismatch here would make
+// the browser silently drop the cookie on every request.
+const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8010";
+
+export interface SquishyType {
+  id: number;
+  name: string;
+  internal_code: string;
+  is_giveaway_item: boolean;
+  created_at: string;
+}
+
+export interface WallSetItem {
+  squishy_type_id: number;
+  name: string;
+  internal_code: string;
+  quantity: number;
+}
+
+export interface WallSet {
+  id: number;
+  label: string;
+  created_at: string;
+  orders_uploaded: boolean;
+  pdf_file_path: string | null;
+  items: WallSetItem[];
+}
+
+export interface UploadSummary {
+  shipments_created: number;
+  requirements_created: number;
+  unmatched_products: string[];
+  labels_matched: number;
+}
+
+export interface ShipmentRequirementRow {
+  squishy_type_id: number;
+  name: string;
+  quantity_required: number;
+  quantity_scanned: number;
+}
+
+export interface ShipmentRow {
+  id: number;
+  tracking_number: string;
+  order_ids: string;
+  bin_number: number | null;
+  is_complete: boolean;
+  completed_at: string | null;
+  requirements: ShipmentRequirementRow[];
+}
+
+export interface FinancialItemLine {
+  squishy_type_id: number;
+  name: string;
+  quantity: number;
+  unit_cost: number | null;
+  line_cost: number | null;
+}
+
+export interface FinancialGiveaway {
+  squishy_type_id: number;
+  name: string | null;
+  quantity: number | null;
+}
+
+export interface FinancialRecord {
+  id: number;
+  wall_set_id: number;
+  streamer: string;
+  stream_started_at: string;
+  stream_ended_at: string;
+  duration_seconds: number;
+  revenue: number;
+  fees: number;
+  bid_average: number;
+  giveaway: FinancialGiveaway | null;
+  notes: string | null;
+  items: FinancialItemLine[];
+  total_item_cost: number;
+  profit: number;
+  roi: number | null; // null until total_item_cost > 0 -- render as "—", never as a raw null or NaN
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FinancialSummary {
+  wall_set_id: number;
+  wall_set_label: string;
+  streamer: string;
+  stream_started_at: string;
+  revenue: number;
+  profit: number;
+  roi: number | null;
+}
+
+export interface FinancialRecordUpsertBody {
+  streamer: string;
+  stream_started_at: string;
+  stream_ended_at: string;
+  revenue: number;
+  fees: number;
+  bid_average: number;
+  giveaway_squishy_type_id?: number | null;
+  giveaway_quantity?: number | null;
+  notes?: string | null;
+  item_costs: { squishy_type_id: number; unit_cost: number }[];
+}
+
+export type ScanResponse =
+  | { status: "unknown_barcode" }
+  | { status: "no_shipment_needs_it"; message: string }
+  | { status: "in_progress"; shipment_id: number; bin_number: number; message: string }
+  | {
+      status: "complete";
+      shipment_id: number;
+      tracking_number: string;
+      bin_number: number;
+      message: string;
+    };
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const resp = await fetch(`${API_BASE}${path}`, { credentials: "include", ...init });
+  if (!resp.ok) {
+    const detail = await resp.text();
+    throw new Error(`${resp.status} ${resp.statusText}: ${detail}`);
+  }
+  return resp.json() as Promise<T>;
+}
+
+export function listSquishyTypes(): Promise<SquishyType[]> {
+  return request("/squishy-types");
+}
+
+export function createSquishyType(body: {
+  name: string;
+  is_giveaway_item?: boolean;
+}): Promise<SquishyType> {
+  return request("/squishy-types", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function listWallSets(): Promise<WallSet[]> {
+  return request("/wall-sets");
+}
+
+export function getWallSet(id: number): Promise<WallSet> {
+  return request(`/wall-sets/${id}`);
+}
+
+export function createWallSet(body: {
+  label: string;
+  items: { squishy_type_id: number; quantity: number }[];
+}): Promise<WallSet> {
+  return request("/wall-sets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function downloadLabelSheet(wallSetId: number): Promise<Blob> {
+  const resp = await fetch(`${API_BASE}/wall-sets/${wallSetId}/label-sheet`, { credentials: "include" });
+  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+  return resp.blob();
+}
+
+export async function downloadSquishyTypeLabelSheet(
+  squishyTypeId: number,
+  quantity: number,
+): Promise<Blob> {
+  const resp = await fetch(
+    `${API_BASE}/squishy-types/${squishyTypeId}/label-sheet?quantity=${quantity}`,
+    { credentials: "include" },
+  );
+  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+  return resp.blob();
+}
+
+export async function uploadOrders(
+  wallSetId: number,
+  csvFile: File,
+  pdfFile: File,
+): Promise<UploadSummary> {
+  const form = new FormData();
+  form.append("csv_file", csvFile);
+  form.append("pdf_file", pdfFile);
+  return request(`/wall-sets/${wallSetId}/upload`, { method: "POST", body: form });
+}
+
+export function scanBarcode(wallSetId: number, barcode: string): Promise<ScanResponse> {
+  return request(`/wall-sets/${wallSetId}/scan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ barcode }),
+  });
+}
+
+export function listShipments(wallSetId: number): Promise<ShipmentRow[]> {
+  return request(`/wall-sets/${wallSetId}/shipments`);
+}
+
+export async function downloadShipmentLabel(
+  wallSetId: number,
+  shipmentId: number,
+): Promise<Blob> {
+  const resp = await fetch(
+    `${API_BASE}/wall-sets/${wallSetId}/shipments/${shipmentId}/label`,
+    { credentials: "include" },
+  );
+  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+  return resp.blob();
+}
+
+export function login(password: string): Promise<{ authenticated: true }> {
+  return request("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+}
+
+export function logout(): Promise<{ authenticated: false }> {
+  return request("/auth/logout", { method: "POST" });
+}
+
+export async function checkAuth(): Promise<boolean> {
+  const resp = await fetch(`${API_BASE}/auth/me`, { credentials: "include" });
+  return resp.ok;
+}
+
+export function listFinancials(): Promise<FinancialSummary[]> {
+  return request("/financials");
+}
+
+export async function getFinancials(wallSetId: number): Promise<FinancialRecord | null> {
+  const resp = await fetch(`${API_BASE}/wall-sets/${wallSetId}/financials`, { credentials: "include" });
+  if (resp.status === 404) return null; // no record entered yet -- expected, not an error
+  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+  return resp.json();
+}
+
+export function upsertFinancials(
+  wallSetId: number,
+  body: FinancialRecordUpsertBody,
+): Promise<FinancialRecord> {
+  return request(`/wall-sets/${wallSetId}/financials`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
