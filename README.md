@@ -219,28 +219,79 @@ route is gated with `Depends(require_admin)`.
 
 ## Local setup
 
-Backend:
+This is split into two parts: **one-time setup** (do this once per
+computer -- e.g. once on the warehouse machine, ever) and **daily use**
+(what `start_squishy_wms.bat` automates every day after that).
+
+### One-time setup
+
+Install once, in order:
+
+1. **Python 3.11+** -- [python.org](https://www.python.org/downloads/),
+   check "Add python.exe to PATH" during install.
+2. **Node.js 18+** -- [nodejs.org](https://nodejs.org/) (LTS build),
+   which bundles npm. **Restart the computer (or at least log out and
+   back in) after installing** -- Windows only picks up the PATH change
+   on a fresh login, and `start_squishy_wms.bat` won't find `node`/`npm`
+   until then.
+3. **This repo** -- clone or copy the whole `squishy_wms` folder onto
+   the machine.
+4. **Backend dependencies + venv**, from the project root:
+   ```
+   python -m venv venv
+   venv\Scripts\activate            # macOS/Linux: source venv/bin/activate
+   pip install -r requirements.txt
+   ```
+5. **Frontend dependencies**:
+   ```
+   cd frontend
+   npm install
+   cd ..
+   ```
+6. **Admin password**, from the project root (venv still active):
+   ```
+   python scripts/set_admin_password.py
+   ```
+   This prompts for a password (hidden input) and writes
+   `ADMIN_PASSWORD_HASH` into a gitignored `.env` file. Login won't work
+   until this has been run at least once; everything else (Wall Builder,
+   Packer Scan, Shipments) works fine without it, since only `/auth/*`
+   and the admin-gated Financials routes need it.
+
+Optional, for developers rather than daily warehouse use:
 
 ```
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-python scripts/set_admin_password.py   # one-time: sets the admin login password
 python tests/test_with_real_files.py   # requires a real CSV/PDF export, see below
 pytest tests/                          # includes tests/test_api.py
+```
+
+### Daily use
+
+Double-click **`start_squishy_wms.bat`** in the project root. It:
+
+- checks that setup (step 2, 4, and 5 above) actually happened, and
+  tells you plainly what's missing if not, instead of failing silently
+- starts the backend (`uvicorn`, port 8010) and frontend (`npm run dev`,
+  port 5173) each in their own window, so you can see their logs if
+  something goes wrong
+- waits for both to actually respond, then opens
+  `http://localhost:5173` in your default browser automatically
+
+Leave the two "Squishy WMS - Backend" / "Squishy WMS - Frontend"
+windows open while using the app -- closing either one stops that half
+of the app. Closing the small launcher window once the browser has
+opened is fine.
+
+To start it manually instead (what the batch file does under the hood):
+
+```
+# Terminal 1, from the project root:
+venv\Scripts\activate
 uvicorn app.api:app --reload --port 8010   # serves on http://127.0.0.1:8010
-```
 
-Login won't work without running `set_admin_password.py` first (or setting
-`ADMIN_PASSWORD_HASH` yourself) -- everything else works fine without it,
-since only `/auth/*` needs it.
-
-Frontend:
-
-```
+# Terminal 2:
 cd frontend
-npm install
-npm run dev                            # serves on http://localhost:5173
+npm run dev                                # serves on http://localhost:5173
 ```
 
 `sample_data/` is gitignored on purpose: TikTok's CSV export contains
