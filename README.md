@@ -95,25 +95,52 @@ for the auth mechanism, which exists for a future admin view, not these).
 
 ### API routes
 
-- `POST /squishy-types`, `GET /squishy-types`
-- `POST /wall-sets`, `GET /wall-sets`, `GET /wall-sets/{id}`
-- `GET /wall-sets/{id}/label-sheet`
-- `POST /wall-sets/{id}/upload` -- multipart `csv_file` + `pdf_file`, runs
+Every route lives under `/api` -- see "Same-origin architecture" below
+for why.
+
+- `POST /api/squishy-types`, `GET /api/squishy-types`
+- `POST /api/wall-sets`, `GET /api/wall-sets`, `GET /api/wall-sets/{id}`
+- `GET /api/wall-sets/{id}/label-sheet`
+- `POST /api/wall-sets/{id}/upload` -- multipart `csv_file` + `pdf_file`, runs
   ingestion, returns `shipments_created` / `requirements_created` /
   `unmatched_products` / `labels_matched`
-- `POST /wall-sets/{id}/scan` -- body `{barcode}`, returns one of
+- `POST /api/wall-sets/{id}/scan` -- body `{barcode}`, returns one of
   `unknown_barcode` / `no_shipment_needs_it` / `in_progress` (+
   `bin_number`) / `complete` (+ `shipment_id`)
-- `GET /wall-sets/{id}/shipments` -- every shipment for a wall set with
+- `GET /api/wall-sets/{id}/shipments` -- every shipment for a wall set with
   requirements nested inline (name, quantity required/scanned per item)
-- `GET /wall-sets/{id}/shipments/{shipment_id}/label` -- the shipment's
+- `GET /api/wall-sets/{id}/shipments/{shipment_id}/label` -- the shipment's
   label page + packing slip page as a two-page PDF
-- `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` -- see the
-  Phase 3 auth section below
+- `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me` -- see
+  the Phase 3 auth section below
 
-CORS is open to the Vite dev origin (`http://localhost:5173`), with
-`allow_credentials=True` so the session cookie rides along. SQLite via
-the existing `app/database.py`; `init_db()` runs on API startup.
+SQLite via the existing `app/database.py`; `init_db()` runs on API startup.
+
+### Same-origin architecture
+
+The frontend and backend are always same-origin, in every environment --
+locally, on a LAN, and in any future hosted deployment -- so there's no
+CORS configuration anywhere in this app, and the frontend never needs to
+know a separate host to call.
+
+- **Every backend route lives under `/api`.** The frontend's own page
+  routes (`/scan`, `/financials`, `/login`, ...) and the API's routes
+  (`GET /api/financials`, `POST /api/wall-sets`, ...) would otherwise
+  collide on identical bare paths once they're served from the same
+  origin -- `/financials` can't mean both "show the Financials page" and
+  "return the JSON financials list" at once. Prefixing the API side (not
+  the page side) keeps the URLs people actually see and bookmark clean.
+- **`API_BASE` in `frontend/src/api.ts` is just `"/api"`**, a fixed
+  relative path -- not an env var, not configured per environment. Every
+  fetch call already funneled through this one constant, so this alone
+  is what makes the frontend's code identical across dev, LAN, and any
+  future hosted deployment.
+- **Locally, Vite's dev server proxies `/api` to the backend** (see
+  `server.proxy` in `frontend/vite.config.ts`), so `npm run dev` (port
+  5173) and `uvicorn` (port 8010) can keep running as two separate
+  processes in dev while the browser only ever talks to port 5173 --
+  same-origin from its point of view, regardless of the two-process
+  reality behind it.
 
 `storage/` is gitignored alongside `sample_data/` -- every wall set's
 upload carries the same real buyer PII as the sample file.
@@ -150,21 +177,24 @@ Shipments stay deliberately unauthenticated; nothing about them changed.
   (30-day expiry) so a login survives a server restart, not just an
   in-memory dict
 - The password itself lives in the `ADMIN_PASSWORD_HASH` env var
-  (`<salt_hex>:<hash_hex>`), loaded from a gitignored `.env` file via
-  `python-dotenv` -- `scripts/set_admin_password.py` prompts for a
-  password (hidden input) and writes that env var for you
+  (`<salt_hex>:<hash_hex>`) -- `scripts/set_admin_password.py` prompts for
+  a password (hidden input) and prints the `ADMIN_PASSWORD_HASH=...` line
+  to paste wherever this deployment actually reads its environment from
+  (locally, it also writes that line into a gitignored `.env` file, loaded
+  via `python-dotenv`, as a convenience)
 - `frontend/src/pages/Login.tsx` (`/login`) -- password field, nothing
   else; the nav shows "Log in" or "Logged in / Logout" based on a
   `GET /auth/me` check on load
-- `API_BASE` in `frontend/src/api.ts` uses hostname `localhost`, not
-  `127.0.0.1` -- the session cookie is `SameSite=Lax`, which cares about
-  hostname (not port), so the frontend origin and the API origin have to
-  agree on "localhost" or the browser silently won't send the cookie
+- The session cookie is `SameSite=Lax` -- harmless now that frontend and
+  backend are always same-origin (see "Same-origin architecture" above),
+  but worth knowing if this ever changes: SameSite cares about hostname,
+  not port, so frontend and backend would need to agree on the same host
+  again the moment they're ever split back into separate origins.
 - The backend now runs on **port 8010**, not 8000 -- an unrelated local
   project (`fba-receiver-full`) binds `0.0.0.0:8000` and was silently
-  intercepting some requests meant for this app. Update `API_BASE` (and
-  the `uvicorn --port` below) if that conflict is ever resolved and you'd
-  rather move back.
+  intercepting some requests meant for this app. Update the `uvicorn
+  --port` below (and `server.proxy` target in `vite.config.ts`) if that
+  conflict is ever resolved and you'd rather move back.
 
 **Financials.** The admin-only financial/performance view -- runs
 alongside Binit's manual tracking spreadsheet, doesn't replace it. Every
@@ -287,12 +317,18 @@ To start it manually instead (what the batch file does under the hood):
 ```
 # Terminal 1, from the project root:
 venv\Scripts\activate
-uvicorn app.api:app --reload --port 8010   # serves on http://127.0.0.1:8010
+uvicorn app.api:app --reload --port 8010   # serves on http://localhost:8010
 
 # Terminal 2:
 cd frontend
-npm run dev                                # serves on http://localhost:5173
+npm run dev                                # serves on http://0.0.0.0:5173 (vite.config.ts sets host: true)
 ```
+
+The backend only ever needs to answer this same machine's Vite dev-server
+proxy (see "Same-origin architecture" above), so it binds to `localhost`
+only -- not reachable from the network directly, by design. The frontend
+still binds to every interface (`host: true`) so other computers on the
+LAN can reach port 5173; see "LAN deployment" below.
 
 `sample_data/` is gitignored on purpose: TikTok's CSV export contains
 real buyer names, addresses, and phone numbers. Drop a real export
@@ -300,3 +336,45 @@ there locally to keep testing against real data, but never commit it.
 `storage/` (created at runtime by the API) is gitignored for the same
 reason. `.env` (holds `ADMIN_PASSWORD_HASH`) is gitignored too -- never
 commit real credentials.
+
+## LAN deployment
+
+By default everything above runs on one machine, reachable only from
+itself (`localhost`). To run the app on one warehouse computer (the
+"server machine") and have other computers on the same WiFi reach it from
+their own browsers -- no cloud, no internet exposure -- two things need
+to be set on the server machine. Thanks to the same-origin architecture
+(above), that's the whole list -- no frontend config, no CORS setting,
+nothing that has to match the server's IP address exactly:
+
+1. **Find the server machine's LAN IP address.** Open a terminal on the
+   server machine and run:
+   ```
+   ipconfig
+   ```
+   Look for the "IPv4 Address" under the active adapter (Wi-Fi or
+   Ethernet) -- typically something like `192.168.1.50`. This is the
+   address other computers will use; it can change if the router
+   reassigns it (a DHCP reservation for this machine avoids that, but
+   that's outside this app's scope).
+
+2. **Windows Firewall.** Windows will prompt to block or allow the app the
+   first time it listens on a network interface, and by default blocks
+   unsolicited inbound connections from other machines even after that.
+   For other computers to reach this app, the server machine needs an
+   inbound firewall rule allowing TCP port **5173** -- just that one; the
+   backend (8010) only ever talks to this same machine's Vite proxy, never
+   the network directly, so it needs no rule of its own. Setting up that
+   rule is on you; nothing in this repo does it automatically.
+
+**On other computers**, just open a browser to `http://192.168.1.50:5173`
+(the server's IP and frontend port) -- no local setup needed on those
+machines, they're only viewing the page the server machine serves, and
+every API call that page makes is proxied straight back to the same
+server automatically.
+
+**On the auth cookie:** the admin login cookie is `SameSite=Lax`, scoped
+to whatever host the browser used to reach the page. Since every visiting
+computer talks to the *same* host (the server's LAN IP) for everything --
+page and API calls alike, both proxied through the one port -- this just
+works, with no per-machine configuration to get wrong.

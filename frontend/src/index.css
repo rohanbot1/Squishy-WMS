@@ -225,3 +225,19 @@ td {
   font-size: 2.5rem;
   font-weight: 800;
 }
+
+.lang-switcher {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.lang-switcher button {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.lang-switcher button.lang-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}

@@ -53,12 +53,17 @@ with Session(engine) as session:
     session.commit()
     session.refresh(wall_set)
 
-    ingest_summary = parse_csv_into_shipments(CSV_PATH, wall_set.id, session)
+    with open(CSV_PATH, "rb") as f:
+        csv_bytes = f.read()
+    with open(PDF_PATH, "rb") as f:
+        pdf_bytes = f.read()
+
+    ingest_summary = parse_csv_into_shipments(csv_bytes, wall_set.id, session)
     print(f"Shipments created: {ingest_summary['shipments_created']}")
     print(f"Requirement lines created: {ingest_summary['requirements_created']}")
     print(f"Unmatched product names: {ingest_summary['unmatched_products']}")
 
-    labels_matched = attach_label_pages(session, wall_set.id, PDF_PATH)
+    labels_matched = attach_label_pages(session, wall_set.id, pdf_bytes)
     total_shipments = len(session.exec(
         select(Shipment).where(Shipment.wall_set_id == wall_set.id)
     ).all())

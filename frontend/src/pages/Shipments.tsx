@@ -7,10 +7,16 @@ import {
   listWallSets,
   triggerBlobDownload,
 } from "../api";
+import { useAuthErrorHandler } from "../useAuthErrorHandler";
 
 type StatusFilter = "open" | "complete" | "all";
 
-export default function Shipments() {
+interface ShipmentsProps {
+  onAuthError: () => void;
+}
+
+export default function Shipments({ onAuthError }: ShipmentsProps) {
+  const handleAuthAwareError = useAuthErrorHandler(onAuthError, "/floor-login");
   const [wallSets, setWallSets] = useState<WallSet[]>([]);
   const uploadedWallSets = wallSets.filter((w) => w.orders_uploaded);
   const [wallSetId, setWallSetId] = useState<number | "">("");
@@ -27,7 +33,7 @@ export default function Shipments() {
   useEffect(() => {
     listWallSets()
       .then(setWallSets)
-      .catch((e) => setError(String(e)));
+      .catch((e) => handleAuthAwareError(e, setError));
   }, []);
 
   useEffect(() => {
@@ -39,7 +45,7 @@ export default function Shipments() {
     setError(null);
     listShipments(wallSetId)
       .then(setShipments)
-      .catch((e) => setError(String(e)))
+      .catch((e) => handleAuthAwareError(e, setError))
       .finally(() => setLoading(false));
   }, [wallSetId]);
 
@@ -63,7 +69,7 @@ export default function Shipments() {
       const blob = await downloadShipmentLabel(wallSetId, shipment.id);
       triggerBlobDownload(blob, `${shipment.tracking_number}.pdf`);
     } catch (e) {
-      setError(String(e));
+      handleAuthAwareError(e, setError);
     } finally {
       setDownloadingId(null);
     }

@@ -15,4 +15,6 @@ dist/
 
 # Holds ADMIN_PASSWORD_HASH -- never commit real credentials.
 .env
+# Real Postgres/R2 credentials for one-off verification -- never commit.
+.env.test
 *.tsbuildinfo

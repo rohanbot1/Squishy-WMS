@@ -1,7 +1,15 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { ScanResponse, WallSet, downloadShipmentLabel, listWallSets, scanBarcode, triggerBlobDownload } from "../api";
+import { useTranslation } from "../i18n";
+import { useAuthErrorHandler } from "../useAuthErrorHandler";
 
-export default function PackerScan() {
+interface PackerScanProps {
+  onAuthError: () => void;
+}
+
+export default function PackerScan({ onAuthError }: PackerScanProps) {
+  const { t } = useTranslation();
+  const handleAuthAwareError = useAuthErrorHandler(onAuthError, "/floor-login");
   const [wallSets, setWallSets] = useState<WallSet[]>([]);
   const uploadedWallSets = wallSets.filter((w) => w.orders_uploaded);
   const [wallSetId, setWallSetId] = useState<number | "">("");
@@ -9,30 +17,26 @@ export default function PackerScan() {
   const [lastResult, setLastResult] = useState<ScanResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [awaitingPacked, setAwaitingPacked] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     listWallSets()
       .then(setWallSets)
-      .catch((e) => setError(String(e)));
+      .catch((e) => handleAuthAwareError(e, setError));
   }, []);
 
   // Runs after React commits the DOM (unlike a focus() call made directly
   // in the submit handler, which can fire before the re-render that clears
   // the `disabled` attribute and silently no-op on a still-disabled input).
   useEffect(() => {
-    if (!awaitingPacked && !busy) {
+    if (!busy) {
       inputRef.current?.focus();
     }
-  }, [wallSetId, awaitingPacked, busy]);
+  }, [wallSetId, busy]);
 
   async function handleScanSubmit(e: FormEvent) {
     e.preventDefault();
-    // The scan input is disabled while awaitingPacked, which already blocks
-    // typing/submission at the browser level -- this guard is defense in
-    // depth in case a submit ever fires some other way.
-    if (wallSetId === "" || !barcode.trim() || busy || awaitingPacked) return;
+    if (wallSetId === "" || !barcode.trim() || busy) return;
     setBusy(true);
     setError(null);
     const scanned = barcode.trim();
@@ -45,30 +49,42 @@ export default function PackerScan() {
       if (result.status === "complete") {
         const blob = await downloadShipmentLabel(wallSetId, result.shipment_id);
         triggerBlobDownload(blob, `${result.tracking_number}.pdf`);
-        setAwaitingPacked(true);
       }
     } catch (e) {
-      setError(String(e));
+      handleAuthAwareError(e, setError);
     } finally {
       setBusy(false);
     }
   }
 
-  function handlePacked() {
-    setAwaitingPacked(false);
-    setLastResult(null);
-  }
-
   function resultLabel(result: ScanResponse): string {
     switch (result.status) {
       case "unknown_barcode":
-        return "Unknown barcode -- not in the catalog.";
+        return t("packerScan.unknownBarcode");
       case "no_shipment_needs_it":
-        return "No open shipment needs this item right now.";
-      case "in_progress":
-        return result.message;
-      case "complete":
-        return "Shipment complete! Label downloading...";
+        return t("packerScan.noShipmentNeedsIt");
+      case "in_progress": {
+        // Squishy type names come through verbatim -- never translated --
+        // interpolated into the localized "still needs" template.
+        const items = result.remaining
+          .map((r) => `${r.name} ×${r.quantity_remaining}`)
+          .join(", ");
+        return (
+          t("packerScan.goesInBin", { n: result.bin_number }) +
+          " " +
+          t("packerScan.stillNeeds", { items })
+        );
+      }
+      case "complete": {
+        // bin_number is only ever set for a shipment that took more than
+        // one scan (a bundle) -- a single-item order that completes on
+        // its one and only scan never occupies a bin, so it stays null.
+        if (result.bin_number != null) {
+          const items = result.items.map((i) => `${i.name} ×${i.quantity}`).join(", ");
+          return t("packerScan.binComplete", { n: result.bin_number, items });
+        }
+        return t("packerScan.shipmentComplete");
+      }
       default:
         return "";
     }
@@ -80,20 +96,19 @@ export default function PackerScan() {
       {error && <p className="error-text">{error}</p>}
 
       <section className="panel">
-        <label htmlFor="wall-set-select">Wall set</label>
+        <label htmlFor="wall-set-select">{t("packerScan.wallSetLabel")}</label>
         <select
           id="wall-set-select"
           value={wallSetId}
           onChange={(e) => {
             setWallSetId(e.target.value ? Number(e.target.value) : "");
             setLastResult(null);
-            setAwaitingPacked(false);
           }}
         >
-          <option value="">Select a wall set...</option>
+          <option value="">{t("packerScan.wallSetPlaceholder")}</option>
           {uploadedWallSets.map((w) => (
             <option key={w.id} value={w.id}>
-              {w.label} (#{w.id}, uploaded)
+              {w.label} (#{w.id}, {t("packerScan.uploaded")})
             </option>
           ))}
         </select>
@@ -102,7 +117,7 @@ export default function PackerScan() {
       {wallSetId !== "" && (
         <section className="panel">
           <form onSubmit={handleScanSubmit}>
-            <label htmlFor="barcode-input">Scan item</label>
+            <label htmlFor="barcode-input">{t("packerScan.scanLabel")}</label>
             <input
               id="barcode-input"
               ref={inputRef}
@@ -111,7 +126,7 @@ export default function PackerScan() {
               autoFocus
               autoComplete="off"
               value={barcode}
-              disabled={busy || awaitingPacked}
+              disabled={busy}
               onChange={(e) => setBarcode(e.target.value)}
             />
           </form>
@@ -119,16 +134,10 @@ export default function PackerScan() {
           {lastResult && (
             <div className={`scan-result status-${lastResult.status}`}>
               {lastResult.status === "in_progress" && (
-                <div className="bin-number">Bin {lastResult.bin_number}</div>
+                <div className="bin-number">{t("packerScan.bin", { n: lastResult.bin_number })}</div>
               )}
               <div>{resultLabel(lastResult)}</div>
             </div>
-          )}
-
-          {awaitingPacked && (
-            <button type="button" onClick={handlePacked} style={{ marginTop: "1rem", width: "100%" }}>
-              Packed
-            </button>
           )}
         </section>
       )}

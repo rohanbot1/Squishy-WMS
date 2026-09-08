@@ -42,19 +42,36 @@ def engine():
 
 
 @pytest.fixture
-def client(engine, tmp_path, monkeypatch):
+def unauthenticated_client(engine, tmp_path, monkeypatch):
+    """The bare app, no login of any kind performed -- for tests that
+    verify the floor gate or admin gate themselves. Almost everything else
+    wants `client` instead, which layers a floor-PIN login on top of this
+    automatically, since floor access is the default assumed state for
+    Wall Builder / Packer Scan / Shipments routes in every other test."""
     def override_get_session():
         with Session(engine) as session:
             yield session
 
     app.dependency_overrides[get_session] = override_get_session
     monkeypatch.setattr("app.api.init_db", lambda: None)
-    monkeypatch.setattr(storage, "STORAGE_ROOT", tmp_path / "storage")
+    monkeypatch.setattr(storage, "LOCAL_STORAGE_ROOT", tmp_path / "storage")
 
     with TestClient(app) as test_client:
         yield test_client
 
     app.dependency_overrides.clear()
+
+
+TEST_FLOOR_PIN = "4321"
+
+
+@pytest.fixture
+def client(unauthenticated_client, monkeypatch):
+    from app.auth import hash_password
+    monkeypatch.setenv("FLOOR_PIN_HASH", hash_password(TEST_FLOOR_PIN))
+    resp = unauthenticated_client.post("/api/auth/floor-login", json={"pin": TEST_FLOOR_PIN})
+    assert resp.status_code == 200, resp.text
+    return unauthenticated_client
 
 
 def _seed_catalog_from_csv(client, csv_path):
@@ -73,7 +90,7 @@ def _seed_catalog_from_csv(client, csv_path):
     catalog = {}
     for i, name in enumerate(sorted(names)):
         code = f"SQ{i:04d}"
-        resp = client.post("/squishy-types", json={"name": name, "internal_code": code})
+        resp = client.post("/api/squishy-types", json={"name": name, "internal_code": code})
         assert resp.status_code == 200, resp.text
         catalog[name] = {"id": resp.json()["id"], "internal_code": code}
     return catalog
@@ -101,7 +118,7 @@ def _find_single_item_order(csv_path):
 def _upload_sample_data(client, wall_set_id):
     with open(CSV_PATH, "rb") as csv_f, open(PDF_PATH, "rb") as pdf_f:
         return client.post(
-            f"/wall-sets/{wall_set_id}/upload",
+            f"/api/wall-sets/{wall_set_id}/upload",
             files={
                 "csv_file": ("orders.csv", csv_f, "text/csv"),
                 "pdf_file": ("labels.pdf", pdf_f, "application/pdf"),
@@ -125,20 +142,20 @@ def admin_password(monkeypatch):
 def admin_client(client, admin_password):
     """A TestClient already logged in as the admin -- for tests that just
     need an authenticated session and aren't testing login itself."""
-    resp = client.post("/auth/login", json={"password": admin_password})
+    resp = client.post("/api/auth/login", json={"password": admin_password})
     assert resp.status_code == 200
     return client
 
 
 def test_login_with_correct_password_sets_session_cookie(client, admin_password):
-    resp = client.post("/auth/login", json={"password": admin_password})
+    resp = client.post("/api/auth/login", json={"password": admin_password})
     assert resp.status_code == 200
     assert resp.json() == {"authenticated": True}
     assert "session" in resp.cookies
 
 
 def test_login_with_wrong_password_rejected(client, admin_password):
-    resp = client.post("/auth/login", json={"password": "wrong"})
+    resp = client.post("/api/auth/login", json={"password": "wrong"})
     assert resp.status_code == 401
 
 
@@ -147,28 +164,28 @@ def test_login_without_admin_password_hash_configured_500s(client, monkeypatch):
     # app.api's load_dotenv() at import time may have already pulled a real
     # ADMIN_PASSWORD_HASH from a local .env into the process environment
     monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
-    resp = client.post("/auth/login", json={"password": "anything"})
+    resp = client.post("/api/auth/login", json={"password": "anything"})
     assert resp.status_code == 500
 
 
 def test_me_without_session_401s(client, admin_password):
-    resp = client.get("/auth/me")
+    resp = client.get("/api/auth/me")
     assert resp.status_code == 401
 
 
 def test_me_with_valid_session_200s(client, admin_password):
-    client.post("/auth/login", json={"password": admin_password})
-    resp = client.get("/auth/me")
+    client.post("/api/auth/login", json={"password": admin_password})
+    resp = client.get("/api/auth/me")
     assert resp.status_code == 200
     assert resp.json() == {"authenticated": True}
 
 
 def test_logout_invalidates_session(client, admin_password):
-    client.post("/auth/login", json={"password": admin_password})
-    resp = client.post("/auth/logout")
+    client.post("/api/auth/login", json={"password": admin_password})
+    resp = client.post("/api/auth/logout")
     assert resp.status_code == 200
 
-    resp = client.get("/auth/me")
+    resp = client.get("/api/auth/me")
     assert resp.status_code == 401
 
 
@@ -184,40 +201,199 @@ def test_expired_session_rejected(client, admin_password, engine):
         session.commit()
 
     client.cookies.set("session", "expiredtoken123")
-    resp = client.get("/auth/me")
+    resp = client.get("/api/auth/me")
     assert resp.status_code == 401
+
+
+# --- floor PIN auth ----------------------------------------------------------
+
+@pytest.fixture
+def floor_pin_hash_set(unauthenticated_client, monkeypatch):
+    """Just the env var, no login performed -- for tests that drive the
+    floor-login flow (or its failure modes) themselves."""
+    from app.auth import hash_password
+    monkeypatch.setenv("FLOOR_PIN_HASH", hash_password(TEST_FLOOR_PIN))
+    return unauthenticated_client
+
+
+def test_floor_login_with_correct_pin_sets_session_cookie(floor_pin_hash_set):
+    resp = floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": TEST_FLOOR_PIN})
+    assert resp.status_code == 200
+    assert resp.json() == {"authenticated": True}
+    assert "floor_session" in resp.cookies
+
+
+def test_floor_login_with_wrong_pin_rejected(floor_pin_hash_set):
+    resp = floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": "0000"})
+    assert resp.status_code == 401
+
+
+def test_floor_login_without_floor_pin_hash_configured_500s(unauthenticated_client, monkeypatch):
+    monkeypatch.delenv("FLOOR_PIN_HASH", raising=False)
+    resp = unauthenticated_client.post("/api/auth/floor-login", json={"pin": "1234"})
+    assert resp.status_code == 500
+
+
+def test_floor_me_without_session_401s(unauthenticated_client):
+    resp = unauthenticated_client.get("/api/auth/floor-me")
+    assert resp.status_code == 401
+
+
+def test_floor_me_with_valid_session_200s(floor_pin_hash_set):
+    floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": TEST_FLOOR_PIN})
+    resp = floor_pin_hash_set.get("/api/auth/floor-me")
+    assert resp.status_code == 200
+    assert resp.json() == {"authenticated": True}
+
+
+# Every Wall Builder / Packer Scan / Shipments route -- if even one of
+# these were left off (or a future route forgot the floor_router), this
+# is what would catch it: a genuine HTTP request, no floor_session
+# cookie, must come back 401, not whatever that route's normal response
+# would otherwise be.
+FLOOR_GATED_ROUTES = [
+    ("post", "/api/squishy-types"),
+    ("get", "/api/squishy-types"),
+    ("get", "/api/squishy-types/999/label-sheet"),
+    ("post", "/api/wall-sets"),
+    ("get", "/api/wall-sets"),
+    ("get", "/api/wall-sets/999"),
+    ("get", "/api/wall-sets/999/shipments"),
+    ("get", "/api/wall-sets/999/label-sheet"),
+    ("post", "/api/wall-sets/999/upload"),
+    ("post", "/api/wall-sets/upload"),
+    ("post", "/api/wall-sets/999/scan"),
+    ("get", "/api/wall-sets/999/shipments/999/label"),
+]
+
+
+@pytest.mark.parametrize("method,path", FLOOR_GATED_ROUTES)
+def test_floor_gated_routes_reject_requests_without_floor_session(unauthenticated_client, method, path):
+    resp = getattr(unauthenticated_client, method)(path)
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Floor PIN not entered"
+
+
+def test_admin_and_financials_routes_are_not_floor_gated(unauthenticated_client):
+    """The two tiers don't stack -- these routes must reject on their own
+    (admin) terms, not the floor gate's, even with zero cookies at all."""
+    resp = unauthenticated_client.get("/api/auth/me")
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Not logged in"
+
+    resp = unauthenticated_client.get("/api/financials")
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Not logged in"
+
+    resp = unauthenticated_client.get("/api/wall-sets/999/financials")
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Not logged in"
+
+    # and the auth mechanism routes themselves must not require floor
+    # access either -- otherwise nobody could ever reach floor-login
+    resp = unauthenticated_client.post("/api/auth/login", json={"password": "whatever"})
+    assert resp.status_code in (401, 500)  # rejected on its own terms, not floor-gated
+
+
+def test_floor_pin_backoff_rejects_even_correct_pin_within_delay_window(floor_pin_hash_set):
+    """The backoff must actually block attempts, not just log them --
+    submitting the CORRECT pin immediately after a couple of wrong ones
+    must still be rejected, proving the delay is enforced before the real
+    PIN check ever runs."""
+    floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": "0000"})
+    floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": "0000"})
+
+    resp = floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": TEST_FLOOR_PIN})
+    assert resp.status_code == 401
+
+
+def test_floor_pin_backoff_does_not_count_attempts_made_within_the_delay(floor_pin_hash_set, engine):
+    """Stronger than just "rejected": a guess submitted inside the backoff
+    window doesn't even advance the failure count, since verify_floor_pin
+    returns early on the timing check before ever reaching the real
+    password comparison. An attacker can't out-pace the delay by firing
+    guesses faster than it allows -- doing so just wastes guesses."""
+    from app.models import PinAttempt
+
+    floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": "0000"})
+    floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": "1111"})
+    floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": "2222"})
+
+    with Session(engine) as session:
+        attempt = session.get(PinAttempt, "testclient")
+        assert attempt.failure_count == 1
+
+
+def test_floor_pin_backoff_allows_correct_pin_once_delay_has_passed(floor_pin_hash_set, engine):
+    """Not a hard lockout -- once enough time has passed, a correct PIN
+    still works, no matter how many prior failures."""
+    from datetime import datetime, timedelta
+    from app.models import PinAttempt
+
+    floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": "0000"})
+
+    with Session(engine) as session:
+        attempt = session.get(PinAttempt, "testclient")
+        assert attempt is not None
+        assert attempt.failure_count == 1
+        attempt.last_attempt_at = datetime.utcnow() - timedelta(minutes=5)
+        session.add(attempt)
+        session.commit()
+
+    resp = floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": TEST_FLOOR_PIN})
+    assert resp.status_code == 200
+    assert "floor_session" in resp.cookies
+
+
+def test_floor_pin_failure_count_resets_after_success(floor_pin_hash_set, engine):
+    from datetime import datetime, timedelta
+    from app.models import PinAttempt
+
+    floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": "0000"})
+
+    with Session(engine) as session:
+        attempt = session.get(PinAttempt, "testclient")
+        attempt.last_attempt_at = datetime.utcnow() - timedelta(minutes=5)
+        session.add(attempt)
+        session.commit()
+
+    resp = floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": TEST_FLOOR_PIN})
+    assert resp.status_code == 200
+
+    with Session(engine) as session:
+        assert session.get(PinAttempt, "testclient") is None
 
 
 # --- squishy type catalog ---------------------------------------------------
 
 def test_create_and_list_squishy_types(client):
-    resp = client.post("/squishy-types", json={"name": "Yellow Butter", "internal_code": "SQ0001"})
+    resp = client.post("/api/squishy-types", json={"name": "Yellow Butter", "internal_code": "SQ0001"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["name"] == "Yellow Butter"
     assert body["internal_code"] == "SQ0001"
     assert body["is_giveaway_item"] is False
 
-    resp = client.get("/squishy-types")
+    resp = client.get("/api/squishy-types")
     assert resp.status_code == 200
     names = [t["name"] for t in resp.json()]
     assert "Yellow Butter" in names
 
 
 def test_create_squishy_type_duplicate_name_rejected(client):
-    client.post("/squishy-types", json={"name": "Dup", "internal_code": "SQ0002"})
-    resp = client.post("/squishy-types", json={"name": "Dup", "internal_code": "SQ0003"})
+    client.post("/api/squishy-types", json={"name": "Dup", "internal_code": "SQ0002"})
+    resp = client.post("/api/squishy-types", json={"name": "Dup", "internal_code": "SQ0003"})
     assert resp.status_code == 409
 
 
 def test_create_squishy_type_without_internal_code_auto_generates_one(client):
-    resp = client.post("/squishy-types", json={"name": "Auto Coded"})
+    resp = client.post("/api/squishy-types", json={"name": "Auto Coded"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["internal_code"]  # non-empty, server-assigned
 
     # a second auto-coded type gets a different code than the first
-    resp2 = client.post("/squishy-types", json={"name": "Auto Coded Two"})
+    resp2 = client.post("/api/squishy-types", json={"name": "Auto Coded Two"})
     assert resp2.status_code == 200
     assert resp2.json()["internal_code"] != body["internal_code"]
 
@@ -225,10 +401,10 @@ def test_create_squishy_type_without_internal_code_auto_generates_one(client):
 # --- wall sets ---------------------------------------------------------------
 
 def test_create_wall_set_with_items_and_fetch_it(client):
-    t1 = client.post("/squishy-types", json={"name": "A", "internal_code": "SQA"}).json()
-    t2 = client.post("/squishy-types", json={"name": "B", "internal_code": "SQB"}).json()
+    t1 = client.post("/api/squishy-types", json={"name": "A", "internal_code": "SQA"}).json()
+    t2 = client.post("/api/squishy-types", json={"name": "B", "internal_code": "SQB"}).json()
 
-    resp = client.post("/wall-sets", json={
+    resp = client.post("/api/wall-sets", json={
         "label": "test wall",
         "items": [
             {"squishy_type_id": t1["id"], "quantity": 3},
@@ -239,25 +415,25 @@ def test_create_wall_set_with_items_and_fetch_it(client):
     wall_set_id = resp.json()["id"]
     assert len(resp.json()["items"]) == 2
 
-    resp = client.get(f"/wall-sets/{wall_set_id}")
+    resp = client.get(f"/api/wall-sets/{wall_set_id}")
     assert resp.status_code == 200
     body = resp.json()
     assert body["label"] == "test wall"
     assert {i["squishy_type_id"] for i in body["items"]} == {t1["id"], t2["id"]}
 
-    resp = client.get("/wall-sets")
+    resp = client.get("/api/wall-sets")
     assert wall_set_id in [w["id"] for w in resp.json()]
 
 
 def test_get_unknown_wall_set_404s(client):
-    resp = client.get("/wall-sets/999")
+    resp = client.get("/api/wall-sets/999")
     assert resp.status_code == 404
 
 
 def test_list_shipments_returns_open_and_complete_with_nested_requirements(client, engine):
-    t1 = client.post("/squishy-types", json={"name": "Yellow Butter", "internal_code": "SQY"}).json()
-    t2 = client.post("/squishy-types", json={"name": "Sugar Baby", "internal_code": "SQS"}).json()
-    wall_set_id = client.post("/wall-sets", json={"label": "shipments test"}).json()["id"]
+    t1 = client.post("/api/squishy-types", json={"name": "Yellow Butter", "internal_code": "SQY"}).json()
+    t2 = client.post("/api/squishy-types", json={"name": "Sugar Baby", "internal_code": "SQS"}).json()
+    wall_set_id = client.post("/api/wall-sets", json={"label": "shipments test"}).json()["id"]
 
     with Session(engine) as session:
         open_bundle = Shipment(wall_set_id=wall_set_id, tracking_number="OPEN001", order_ids="O1", bin_number=1)
@@ -282,7 +458,7 @@ def test_list_shipments_returns_open_and_complete_with_nested_requirements(clien
         session.commit()
         open_id, completed_id = open_bundle.id, completed.id
 
-    resp = client.get(f"/wall-sets/{wall_set_id}/shipments")
+    resp = client.get(f"/api/wall-sets/{wall_set_id}/shipments")
     assert resp.status_code == 200
     body = resp.json()
     assert len(body) == 2
@@ -306,57 +482,57 @@ def test_list_shipments_returns_open_and_complete_with_nested_requirements(clien
 
 
 def test_list_shipments_for_wall_set_with_none_returns_empty_list(client):
-    wall_set = client.post("/wall-sets", json={"label": "empty shipments test"}).json()
-    resp = client.get(f"/wall-sets/{wall_set['id']}/shipments")
+    wall_set = client.post("/api/wall-sets", json={"label": "empty shipments test"}).json()
+    resp = client.get(f"/api/wall-sets/{wall_set['id']}/shipments")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
 def test_list_shipments_unknown_wall_set_404s(client):
-    resp = client.get("/wall-sets/999/shipments")
+    resp = client.get("/api/wall-sets/999/shipments")
     assert resp.status_code == 404
 
 
 def test_label_sheet_download(client):
-    t1 = client.post("/squishy-types", json={"name": "A", "internal_code": "SQA"}).json()
-    wall_set = client.post("/wall-sets", json={
+    t1 = client.post("/api/squishy-types", json={"name": "A", "internal_code": "SQA"}).json()
+    wall_set = client.post("/api/wall-sets", json={
         "label": "sheet test",
         "items": [{"squishy_type_id": t1["id"], "quantity": 2}],
     }).json()
 
-    resp = client.get(f"/wall-sets/{wall_set['id']}/label-sheet")
+    resp = client.get(f"/api/wall-sets/{wall_set['id']}/label-sheet")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/pdf"
     assert len(resp.content) > 0
 
 
 def test_squishy_type_label_sheet_download(client):
-    t1 = client.post("/squishy-types", json={"name": "Solo Type", "internal_code": "SQSOLO"}).json()
+    t1 = client.post("/api/squishy-types", json={"name": "Solo Type", "internal_code": "SQSOLO"}).json()
 
-    resp = client.get(f"/squishy-types/{t1['id']}/label-sheet")
+    resp = client.get(f"/api/squishy-types/{t1['id']}/label-sheet")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/pdf"
     doc = fitz.open(stream=resp.content, filetype="pdf")
     assert len(doc) == 1  # default quantity
     doc.close()
 
-    resp = client.get(f"/squishy-types/{t1['id']}/label-sheet", params={"quantity": 3})
+    resp = client.get(f"/api/squishy-types/{t1['id']}/label-sheet", params={"quantity": 3})
     assert resp.status_code == 200
     doc = fitz.open(stream=resp.content, filetype="pdf")
     assert len(doc) == 3
     for page in doc:
-        assert (page.rect.width, page.rect.height) == (144.0, 72.0)  # 2in x 1in
+        assert (page.rect.width, page.rect.height) == (216.0, 72.0)  # 3in x 1in
     doc.close()
 
 
 def test_squishy_type_label_sheet_unknown_type_404s(client):
-    resp = client.get("/squishy-types/999/label-sheet")
+    resp = client.get("/api/squishy-types/999/label-sheet")
     assert resp.status_code == 404
 
 
 def test_squishy_type_label_sheet_rejects_zero_quantity(client):
-    t1 = client.post("/squishy-types", json={"name": "Zero Qty", "internal_code": "SQZERO"}).json()
-    resp = client.get(f"/squishy-types/{t1['id']}/label-sheet", params={"quantity": 0})
+    t1 = client.post("/api/squishy-types", json={"name": "Zero Qty", "internal_code": "SQZERO"}).json()
+    resp = client.get(f"/api/squishy-types/{t1['id']}/label-sheet", params={"quantity": 0})
     assert resp.status_code == 400
 
 
@@ -365,7 +541,7 @@ def test_squishy_type_label_sheet_rejects_zero_quantity(client):
 @pytest.mark.skipif(not HAS_SAMPLE_DATA, reason="requires a real export in sample_data/")
 def test_upload_produces_ingestion_summary(client):
     _seed_catalog_from_csv(client, CSV_PATH)
-    wall_set = client.post("/wall-sets", json={"label": "upload test"}).json()
+    wall_set = client.post("/api/wall-sets", json={"label": "upload test"}).json()
 
     resp = _upload_sample_data(client, wall_set["id"])
     assert resp.status_code == 200
@@ -380,7 +556,7 @@ def test_upload_produces_ingestion_summary(client):
 def test_upload_highlights_unmatched_products_when_catalog_incomplete(client):
     # deliberately skip seeding the catalog -- every product name should
     # come back unmatched
-    wall_set = client.post("/wall-sets", json={"label": "incomplete catalog test"}).json()
+    wall_set = client.post("/api/wall-sets", json={"label": "incomplete catalog test"}).json()
     resp = _upload_sample_data(client, wall_set["id"])
     assert resp.status_code == 200
     body = resp.json()
@@ -388,24 +564,55 @@ def test_upload_highlights_unmatched_products_when_catalog_incomplete(client):
     assert len(body["unmatched_products"]) > 0
 
 
+@pytest.mark.skipif(not HAS_SAMPLE_DATA, reason="requires a real export in sample_data/")
+def test_upload_to_new_wall_set_auto_creates_wall_set_with_no_manifest(client):
+    """Wall Builder no longer has a manual "build a wall" step -- uploading
+    a CSV/PDF straight away, with no pre-existing WallSet, should still
+    ingest correctly by creating its own WallSet on the fly."""
+    _seed_catalog_from_csv(client, CSV_PATH)
+
+    with open(CSV_PATH, "rb") as csv_f, open(PDF_PATH, "rb") as pdf_f:
+        resp = client.post(
+            "/api/wall-sets/upload",
+            files={
+                "csv_file": ("orders.csv", csv_f, "text/csv"),
+                "pdf_file": ("labels.pdf", pdf_f, "application/pdf"),
+            },
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["shipments_created"] > 0
+    assert body["requirements_created"] > 0
+    assert body["labels_matched"] == body["shipments_created"]
+    assert body["wall_set_id"] is not None
+    assert body["wall_set_label"].startswith("Upload ")
+
+    wall_set = client.get(f"/api/wall-sets/{body['wall_set_id']}").json()
+    assert wall_set["orders_uploaded"] is True
+    assert wall_set["items"] == []  # no manifest was ever built for this wall set
+
+    shipments = client.get(f"/api/wall-sets/{body['wall_set_id']}/shipments").json()
+    assert len(shipments) == body["shipments_created"]
+
+
 # --- scanning ------------------------------------------------------------
 
 @pytest.mark.skipif(not HAS_SAMPLE_DATA, reason="requires a real export in sample_data/")
 def test_scan_to_complete_and_download_label(client):
     catalog = _seed_catalog_from_csv(client, CSV_PATH)
-    wall_set = client.post("/wall-sets", json={"label": "scan test"}).json()
+    wall_set = client.post("/api/wall-sets", json={"label": "scan test"}).json()
     wall_set_id = wall_set["id"]
 
     _upload_sample_data(client, wall_set_id)
 
-    resp = client.post(f"/wall-sets/{wall_set_id}/scan", json={"barcode": "NOT-A-REAL-CODE"})
+    resp = client.post(f"/api/wall-sets/{wall_set_id}/scan", json={"barcode": "NOT-A-REAL-CODE"})
     assert resp.json() == {"status": "unknown_barcode"}
 
     tracking, product_name = _find_single_item_order(CSV_PATH)
     assert tracking is not None, "sample export has no single-item order to test against"
     barcode = catalog[product_name]["internal_code"]
 
-    resp = client.post(f"/wall-sets/{wall_set_id}/scan", json={"barcode": barcode})
+    resp = client.post(f"/api/wall-sets/{wall_set_id}/scan", json={"barcode": barcode})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "complete"
@@ -423,13 +630,13 @@ def test_scan_to_complete_and_download_label(client):
                 total_needed += int(row.get("Quantity", "0") or 0)
 
     for _ in range(total_needed - 1):  # the completed shipment above used one
-        resp = client.post(f"/wall-sets/{wall_set_id}/scan", json={"barcode": barcode})
+        resp = client.post(f"/api/wall-sets/{wall_set_id}/scan", json={"barcode": barcode})
         assert resp.json()["status"] in {"in_progress", "complete"}
 
-    resp = client.post(f"/wall-sets/{wall_set_id}/scan", json={"barcode": barcode})
+    resp = client.post(f"/api/wall-sets/{wall_set_id}/scan", json={"barcode": barcode})
     assert resp.json()["status"] == "no_shipment_needs_it"
 
-    resp = client.get(f"/wall-sets/{wall_set_id}/shipments/{shipment_id}/label")
+    resp = client.get(f"/api/wall-sets/{wall_set_id}/shipments/{shipment_id}/label")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/pdf"
     assert len(resp.content) > 0
@@ -444,14 +651,138 @@ def test_scan_to_complete_and_download_label(client):
 
 
 def test_scan_against_wall_set_with_no_shipments_returns_no_match(client):
-    t1 = client.post("/squishy-types", json={"name": "Lonely Squishy", "internal_code": "SQLONE"}).json()
-    wall_set = client.post("/wall-sets", json={
+    t1 = client.post("/api/squishy-types", json={"name": "Lonely Squishy", "internal_code": "SQLONE"}).json()
+    wall_set = client.post("/api/wall-sets", json={
         "label": "empty scan test",
         "items": [{"squishy_type_id": t1["id"], "quantity": 1}],
     }).json()
 
-    resp = client.post(f"/wall-sets/{wall_set['id']}/scan", json={"barcode": "SQLONE"})
+    resp = client.post(f"/api/wall-sets/{wall_set['id']}/scan", json={"barcode": "SQLONE"})
     assert resp.json()["status"] == "no_shipment_needs_it"
+
+
+def test_scan_in_progress_includes_structured_remaining_items(client, engine):
+    """The frontend builds its own localized "still needs" sentence from
+    `remaining` rather than parsing the English `message` -- squishy type
+    names must come through untranslated, so this checks the raw name/qty
+    pairs, not any particular wording."""
+    t1 = client.post("/api/squishy-types", json={"name": "Yellow Butter", "internal_code": "SQY"}).json()
+    t2 = client.post("/api/squishy-types", json={"name": "Sugar Baby", "internal_code": "SQS"}).json()
+    wall_set_id = client.post("/api/wall-sets", json={"label": "remaining items test"}).json()["id"]
+
+    with Session(engine) as session:
+        shipment = Shipment(wall_set_id=wall_set_id, tracking_number="BUNDLE001", order_ids="O1")
+        session.add(shipment)
+        session.flush()
+        session.add(ShipmentRequirement(
+            shipment_id=shipment.id, squishy_type_id=t1["id"], quantity_required=2, quantity_scanned=0,
+        ))
+        session.add(ShipmentRequirement(
+            shipment_id=shipment.id, squishy_type_id=t2["id"], quantity_required=1, quantity_scanned=0,
+        ))
+        session.commit()
+
+    resp = client.post(f"/api/wall-sets/{wall_set_id}/scan", json={"barcode": "SQY"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "in_progress"
+    remaining_by_name = {r["name"]: r["quantity_remaining"] for r in body["remaining"]}
+    assert remaining_by_name == {"Yellow Butter": 1, "Sugar Baby": 1}
+
+
+def test_scan_completes_multi_item_bundle_via_sequential_scans(client, engine):
+    """A 3-distinct-type bundle, scanned one type at a time through the
+    actual /scan route (not seeded as already-scanned) -- the third and
+    final scan must return "complete" with a label, not get stuck at
+    "in_progress" or regress to "no_shipment_needs_it". Guards against the
+    structured `remaining` list (added for the language switcher) ever
+    interfering with the completion check it sits right next to."""
+    t1 = client.post("/api/squishy-types", json={"name": "Bundle Item A", "internal_code": "SQBA"}).json()
+    t2 = client.post("/api/squishy-types", json={"name": "Bundle Item B", "internal_code": "SQBB"}).json()
+    t3 = client.post("/api/squishy-types", json={"name": "Bundle Item C", "internal_code": "SQBC"}).json()
+    wall_set_id = client.post("/api/wall-sets", json={"label": "bundle completion test"}).json()["id"]
+
+    with Session(engine) as session:
+        shipment = Shipment(wall_set_id=wall_set_id, tracking_number="BUNDLECOMPLETE001", order_ids="O1")
+        session.add(shipment)
+        session.flush()
+        for t in (t1, t2, t3):
+            session.add(ShipmentRequirement(
+                shipment_id=shipment.id, squishy_type_id=t["id"], quantity_required=1, quantity_scanned=0,
+            ))
+        session.commit()
+
+    assert client.post(f"/api/wall-sets/{wall_set_id}/scan", json={"barcode": "SQBA"}).json()["status"] == "in_progress"
+    assert client.post(f"/api/wall-sets/{wall_set_id}/scan", json={"barcode": "SQBB"}).json()["status"] == "in_progress"
+
+    resp = client.post(f"/api/wall-sets/{wall_set_id}/scan", json={"barcode": "SQBC"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "complete"
+    assert body["tracking_number"] == "BUNDLECOMPLETE001"
+    # a bundle took more than one scan to finish -- it must have a bin, and
+    # the frontend needs every item that made up the shipment to build its
+    # "Bin N complete: ..." message (squishy names untranslated, verbatim)
+    assert body["bin_number"] is not None
+    items_by_name = {i["name"]: i["quantity"] for i in body["items"]}
+    assert items_by_name == {"Bundle Item A": 1, "Bundle Item B": 1, "Bundle Item C": 1}
+
+    # persisted as complete, not just reflected in the response
+    shipments = client.get(f"/api/wall-sets/{wall_set_id}/shipments").json()
+    completed = next(s for s in shipments if s["tracking_number"] == "BUNDLECOMPLETE001")
+    assert completed["is_complete"] is True
+    assert all(r["quantity_scanned"] == r["quantity_required"] for r in completed["requirements"])
+
+
+def test_scan_completes_single_item_order_with_no_bin_assigned(client, engine):
+    """A single-item order completes on its one and only scan -- it never
+    sits waiting in a bin, so bin_number must stay null (not get assigned
+    and then immediately orphaned). This is what the frontend's bin_number
+    check leans on to tell a single-item completion apart from a bundle's."""
+    t1 = client.post("/api/squishy-types", json={"name": "Solo Item", "internal_code": "SQSOLO"}).json()
+    wall_set_id = client.post("/api/wall-sets", json={"label": "single item completion test"}).json()["id"]
+
+    with Session(engine) as session:
+        shipment = Shipment(wall_set_id=wall_set_id, tracking_number="SOLOCOMPLETE001", order_ids="O1")
+        session.add(shipment)
+        session.flush()
+        session.add(ShipmentRequirement(
+            shipment_id=shipment.id, squishy_type_id=t1["id"], quantity_required=1, quantity_scanned=0,
+        ))
+        session.commit()
+
+    resp = client.post(f"/api/wall-sets/{wall_set_id}/scan", json={"barcode": "SQSOLO"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "complete"
+    assert body["bin_number"] is None
+    assert body["items"] == [{"name": "Solo Item", "quantity": 1}]
+
+
+def test_scan_is_scoped_to_its_own_wall_set(client, engine):
+    """Not a bug, but easy to trip over now that uploads auto-create their
+    own WallSet: a shipment is only reachable through the wall_set_id it
+    actually belongs to. Scanning a barcode against the wrong wall set
+    returns "no_shipment_needs_it" even when some other wall set has an
+    open shipment that needs exactly that item."""
+    t1 = client.post("/api/squishy-types", json={"name": "Cross Wall Item", "internal_code": "SQCW"}).json()
+    wall_set_a = client.post("/api/wall-sets", json={"label": "wall a"}).json()["id"]
+    wall_set_b = client.post("/api/wall-sets", json={"label": "wall b"}).json()["id"]
+
+    with Session(engine) as session:
+        shipment = Shipment(wall_set_id=wall_set_a, tracking_number="CROSSWALL001", order_ids="O1")
+        session.add(shipment)
+        session.flush()
+        session.add(ShipmentRequirement(
+            shipment_id=shipment.id, squishy_type_id=t1["id"], quantity_required=1, quantity_scanned=0,
+        ))
+        session.commit()
+
+    resp = client.post(f"/api/wall-sets/{wall_set_b}/scan", json={"barcode": "SQCW"})
+    assert resp.json()["status"] == "no_shipment_needs_it"
+
+    resp = client.post(f"/api/wall-sets/{wall_set_a}/scan", json={"barcode": "SQCW"})
+    assert resp.json()["status"] == "complete"
 
 
 # --- financials (admin-only) -------------------------------------------------
@@ -459,13 +790,13 @@ def test_scan_against_wall_set_with_no_shipments_returns_no_match(client):
 def _make_wall_set_with_items(client, label="financials test"):
     # names/codes vary by label so this helper can be called more than once
     # in the same test (e.g. two wall sets) without a 409 name collision
-    t1 = client.post("/squishy-types", json={
+    t1 = client.post("/api/squishy-types", json={
         "name": f"Yellow Butter ({label})", "internal_code": f"SQFY-{label}",
     }).json()
-    t2 = client.post("/squishy-types", json={
+    t2 = client.post("/api/squishy-types", json={
         "name": f"Sugar Baby ({label})", "internal_code": f"SQFS-{label}", "is_giveaway_item": True,
     }).json()
-    wall_set = client.post("/wall-sets", json={
+    wall_set = client.post("/api/wall-sets", json={
         "label": label,
         "items": [
             {"squishy_type_id": t1["id"], "quantity": 10},
@@ -482,9 +813,9 @@ def test_financials_routes_require_admin(client):
         "stream_ended_at": "2026-09-01T20:00:00", "revenue": 100, "fees": 10,
         "bid_average": 1.5, "item_costs": [],
     }
-    assert client.put(f"/wall-sets/{wall_set['id']}/financials", json=body).status_code == 401
-    assert client.get(f"/wall-sets/{wall_set['id']}/financials").status_code == 401
-    assert client.get("/financials").status_code == 401
+    assert client.put(f"/api/wall-sets/{wall_set['id']}/financials", json=body).status_code == 401
+    assert client.get(f"/api/wall-sets/{wall_set['id']}/financials").status_code == 401
+    assert client.get("/api/financials").status_code == 401
 
 
 def test_upsert_financials_creates_then_updates(admin_client, engine):
@@ -502,7 +833,7 @@ def test_upsert_financials_creates_then_updates(admin_client, engine):
             {"squishy_type_id": t2["id"], "unit_cost": 2.0},   # 5 * 2.0 = 10
         ],
     }
-    resp = admin_client.put(f"/wall-sets/{wall_set['id']}/financials", json=create_body)
+    resp = admin_client.put(f"/api/wall-sets/{wall_set['id']}/financials", json=create_body)
     assert resp.status_code == 200
     body = resp.json()
     assert body["wall_set_id"] == wall_set["id"]
@@ -524,7 +855,7 @@ def test_upsert_financials_creates_then_updates(admin_client, engine):
     # update: different revenue and only one item costed now
     update_body = {**create_body, "revenue": 600.0,
                    "item_costs": [{"squishy_type_id": t1["id"], "unit_cost": 3.0}]}
-    resp = admin_client.put(f"/wall-sets/{wall_set['id']}/financials", json=update_body)
+    resp = admin_client.put(f"/api/wall-sets/{wall_set['id']}/financials", json=update_body)
     assert resp.status_code == 200
     body = resp.json()
     assert body["revenue"] == 600.0
@@ -551,7 +882,7 @@ def test_financials_zero_item_cost_roi_is_null(admin_client):
         "revenue": 500.0, "fees": 25.0, "bid_average": 2.5,
         "item_costs": [],  # nothing costed yet
     }
-    resp = admin_client.put(f"/wall-sets/{wall_set['id']}/financials", json=body)
+    resp = admin_client.put(f"/api/wall-sets/{wall_set['id']}/financials", json=body)
     assert resp.status_code == 200
     created = resp.json()
     assert created["total_item_cost"] == 0.0
@@ -559,21 +890,48 @@ def test_financials_zero_item_cost_roi_is_null(admin_client):
     assert created["profit"] == 475.0  # revenue - fees, no item cost yet
 
     # read it back fresh too, not just the write response
-    resp = admin_client.get(f"/wall-sets/{wall_set['id']}/financials")
+    resp = admin_client.get(f"/api/wall-sets/{wall_set['id']}/financials")
     assert resp.status_code == 200
     fetched = resp.json()
     assert fetched["total_item_cost"] == 0.0
     assert fetched["roi"] is None
 
 
+def test_financials_work_for_wall_set_with_no_manifest(admin_client):
+    """Wall sets created by the upload flow now have no WallSetItem manifest
+    at all (not just uncosted items) -- confirms Financials still works
+    sensibly against one: no item-cost rows, zero cost, null ROI, no error."""
+    wall_set = admin_client.post("/api/wall-sets", json={"label": "Upload 2026-09-01 12:00:00 UTC"}).json()
+
+    body = {
+        "streamer": "Binit",
+        "stream_started_at": "2026-09-01T18:00:00",
+        "stream_ended_at": "2026-09-01T20:00:00",
+        "revenue": 300.0, "fees": 10.0, "bid_average": 3.0,
+        "item_costs": [],
+    }
+    resp = admin_client.put(f"/api/wall-sets/{wall_set['id']}/financials", json=body)
+    assert resp.status_code == 200
+    created = resp.json()
+    assert created["items"] == []
+    assert created["total_item_cost"] == 0.0
+    assert created["roi"] is None
+    assert created["profit"] == 290.0
+
+    resp = admin_client.get("/api/financials")
+    assert resp.status_code == 200
+    summary = next(r for r in resp.json() if r["wall_set_id"] == wall_set["id"])
+    assert summary["roi"] is None
+
+
 def test_get_financials_for_wall_set_without_record_404s(admin_client):
     wall_set, _, _ = _make_wall_set_with_items(admin_client)
-    resp = admin_client.get(f"/wall-sets/{wall_set['id']}/financials")
+    resp = admin_client.get(f"/api/wall-sets/{wall_set['id']}/financials")
     assert resp.status_code == 404
 
 
 def test_upsert_financials_unknown_wall_set_404s(admin_client):
-    resp = admin_client.put("/wall-sets/999/financials", json={
+    resp = admin_client.put("/api/wall-sets/999/financials", json={
         "streamer": "Binit", "stream_started_at": "2026-09-01T18:00:00",
         "stream_ended_at": "2026-09-01T20:00:00", "revenue": 1, "fees": 0,
         "bid_average": 0, "item_costs": [],
@@ -583,7 +941,7 @@ def test_upsert_financials_unknown_wall_set_404s(admin_client):
 
 def test_upsert_financials_invalid_giveaway_type_400s(admin_client):
     wall_set, _, _ = _make_wall_set_with_items(admin_client)
-    resp = admin_client.put(f"/wall-sets/{wall_set['id']}/financials", json={
+    resp = admin_client.put(f"/api/wall-sets/{wall_set['id']}/financials", json={
         "streamer": "Binit", "stream_started_at": "2026-09-01T18:00:00",
         "stream_ended_at": "2026-09-01T20:00:00", "revenue": 1, "fees": 0,
         "bid_average": 0, "giveaway_squishy_type_id": 999, "item_costs": [],
@@ -595,18 +953,18 @@ def test_list_financials_summarizes_all_records(admin_client):
     wall_set_a, t1a, _ = _make_wall_set_with_items(admin_client, label="stream A")
     wall_set_b, t1b, _ = _make_wall_set_with_items(admin_client, label="stream B")
 
-    admin_client.put(f"/wall-sets/{wall_set_a['id']}/financials", json={
+    admin_client.put(f"/api/wall-sets/{wall_set_a['id']}/financials", json={
         "streamer": "Binit", "stream_started_at": "2026-09-01T18:00:00",
         "stream_ended_at": "2026-09-01T20:00:00", "revenue": 100.0, "fees": 10.0,
         "bid_average": 1.0, "item_costs": [{"squishy_type_id": t1a["id"], "unit_cost": 1.0}],
     })
-    admin_client.put(f"/wall-sets/{wall_set_b['id']}/financials", json={
+    admin_client.put(f"/api/wall-sets/{wall_set_b['id']}/financials", json={
         "streamer": "Binit", "stream_started_at": "2026-09-02T18:00:00",
         "stream_ended_at": "2026-09-02T20:00:00", "revenue": 200.0, "fees": 20.0,
         "bid_average": 1.0, "item_costs": [],
     })
 
-    resp = admin_client.get("/financials")
+    resp = admin_client.get("/api/financials")
     assert resp.status_code == 200
     body = resp.json()
     assert len(body) == 2

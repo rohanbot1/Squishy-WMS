@@ -12,11 +12,11 @@ slip is always label_page_index + 1.
 import fitz  # PyMuPDF
 
 
-def extract_label_and_packing_slip(pdf_path: str, label_page_index: int) -> bytes:
+def extract_label_and_packing_slip(pdf_bytes: bytes, label_page_index: int) -> bytes:
     """Returns a standalone two-page PDF (as bytes): the label page at
     `label_page_index`, followed by its packing slip at label_page_index + 1,
-    both from the master PDF at `pdf_path`."""
-    source = fitz.open(pdf_path)
+    both from the master PDF given as `pdf_bytes`."""
+    source = fitz.open(stream=pdf_bytes, filetype="pdf")
     output = fitz.open()
     output.insert_pdf(source, from_page=label_page_index, to_page=label_page_index + 1)
     data = output.tobytes()

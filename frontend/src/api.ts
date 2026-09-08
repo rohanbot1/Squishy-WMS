@@ -1,8 +1,8 @@
-// "localhost" here (not 127.0.0.1) has to match the hostname the frontend
-// itself is served from -- the admin session cookie is SameSite=Lax, and
-// SameSite cares about hostname, not port, so a mismatch here would make
-// the browser silently drop the cookie on every request.
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8010";
+// Always relative -- the backend is same-origin in every environment:
+// Vite's dev-server proxy forwards /api to the backend locally (see
+// vite.config.ts), and a single service serves both in production. There
+// is no separate host to configure per environment.
+const API_BASE = "/api";
 
 export interface SquishyType {
   id: number;
@@ -33,6 +33,21 @@ export interface UploadSummary {
   requirements_created: number;
   unmatched_products: string[];
   labels_matched: number;
+}
+
+export interface UploadToNewWallSetSummary extends UploadSummary {
+  wall_set_id: number;
+  wall_set_label: string;
+}
+
+export interface RemainingRequirement {
+  name: string;
+  quantity_remaining: number;
+}
+
+export interface ShipmentItem {
+  name: string;
+  quantity: number;
 }
 
 export interface ShipmentRequirementRow {
@@ -112,13 +127,20 @@ export interface FinancialRecordUpsertBody {
 export type ScanResponse =
   | { status: "unknown_barcode" }
   | { status: "no_shipment_needs_it"; message: string }
-  | { status: "in_progress"; shipment_id: number; bin_number: number; message: string }
+  | {
+      status: "in_progress";
+      shipment_id: number;
+      bin_number: number;
+      message: string;
+      remaining: RemainingRequirement[];
+    }
   | {
       status: "complete";
       shipment_id: number;
       tracking_number: string;
-      bin_number: number;
+      bin_number: number | null;
       message: string;
+      items: ShipmentItem[];
     };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -128,6 +150,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(`${resp.status} ${resp.statusText}: ${detail}`);
   }
   return resp.json() as Promise<T>;
+}
+
+// Both tiers' "am I logged in" state (App.tsx's `isAdmin` / `isFloorUnlocked`)
+// is only ever set from a mount-time check -- it never re-verifies itself,
+// so it can go stale relative to the session's actual, current validity
+// (expired, logged out elsewhere, etc). Admin- and floor-gated pages alike
+// use this to detect that staleness from a real 401 and resync/redirect
+// rather than just showing a raw error under state that still claims
+// everything's fine.
+export function isUnauthorizedError(e: unknown): boolean {
+  return e instanceof Error && e.message.startsWith("401");
 }
 
 export function listSquishyTypes(): Promise<SquishyType[]> {
@@ -153,23 +186,6 @@ export function getWallSet(id: number): Promise<WallSet> {
   return request(`/wall-sets/${id}`);
 }
 
-export function createWallSet(body: {
-  label: string;
-  items: { squishy_type_id: number; quantity: number }[];
-}): Promise<WallSet> {
-  return request("/wall-sets", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
-
-export async function downloadLabelSheet(wallSetId: number): Promise<Blob> {
-  const resp = await fetch(`${API_BASE}/wall-sets/${wallSetId}/label-sheet`, { credentials: "include" });
-  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
-  return resp.blob();
-}
-
 export async function downloadSquishyTypeLabelSheet(
   squishyTypeId: number,
   quantity: number,
@@ -191,6 +207,16 @@ export async function uploadOrders(
   form.append("csv_file", csvFile);
   form.append("pdf_file", pdfFile);
   return request(`/wall-sets/${wallSetId}/upload`, { method: "POST", body: form });
+}
+
+export function uploadOrdersToNewWallSet(
+  csvFile: File,
+  pdfFile: File,
+): Promise<UploadToNewWallSetSummary> {
+  const form = new FormData();
+  form.append("csv_file", csvFile);
+  form.append("pdf_file", pdfFile);
+  return request("/wall-sets/upload", { method: "POST", body: form });
 }
 
 export function scanBarcode(wallSetId: number, barcode: string): Promise<ScanResponse> {
@@ -231,6 +257,19 @@ export function logout(): Promise<{ authenticated: false }> {
 
 export async function checkAuth(): Promise<boolean> {
   const resp = await fetch(`${API_BASE}/auth/me`, { credentials: "include" });
+  return resp.ok;
+}
+
+export function floorLogin(pin: string): Promise<{ authenticated: true }> {
+  return request("/auth/floor-login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pin }),
+  });
+}
+
+export async function checkFloorAccess(): Promise<boolean> {
+  const resp = await fetch(`${API_BASE}/auth/floor-me`, { credentials: "include" });
   return resp.ok;
 }
 

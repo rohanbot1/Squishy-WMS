@@ -66,7 +66,7 @@ set /a ATTEMPTS=0
 set /a ATTEMPTS+=1
 
 if %READY_BACKEND%==0 (
-    curl -s -o NUL -w "%%{http_code}" http://localhost:8010/wall-sets > "%TEMP%\squishy_backend_status.txt" 2>NUL
+    curl -s -o NUL -w "%%{http_code}" http://localhost:8010/api/wall-sets > "%TEMP%\squishy_backend_status.txt" 2>NUL
     set /p BACKEND_STATUS=<"%TEMP%\squishy_backend_status.txt"
     if "!BACKEND_STATUS!"=="200" set READY_BACKEND=1
 )

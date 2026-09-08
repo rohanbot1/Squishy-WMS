@@ -39,7 +39,7 @@ class WallSet(SQLModel, table=True):
     label: str  # e.g. "9/1 stream" or whatever Binit's team calls it
     created_at: datetime = Field(default_factory=datetime.utcnow)
     orders_uploaded: bool = Field(default=False)
-    pdf_file_path: Optional[str] = None  # stored master label/packing-slip PDF, set on upload
+    pdf_file_path: Optional[str] = None  # storage key for the master label/packing-slip PDF (app/storage.py), set on upload
 
 
 class WallSetItem(SQLModel, table=True):
@@ -96,6 +96,29 @@ class AdminSession(SQLModel, table=True):
     token: str = Field(primary_key=True)  # secrets.token_urlsafe(32)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     expires_at: datetime
+
+
+class FloorSession(SQLModel, table=True):
+    """A device that's entered the shared floor PIN -- gates Wall Builder,
+    Packer Scan, and Shipments (see require_floor_access in app/auth.py).
+    Deliberately not unified with AdminSession: different secret strength,
+    different session length, and floor-PIN attempts get rate-limited in a
+    way admin login doesn't, so keeping them as two small independent
+    things stays clearer than one generalized one."""
+    token: str = Field(primary_key=True)  # secrets.token_urlsafe(32)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: datetime
+
+
+class PinAttempt(SQLModel, table=True):
+    """Exponential-backoff state for one source IP's floor-PIN attempts.
+    Never a hard lockout -- see verify_floor_pin in app/auth.py -- just an
+    increasing delay so brute-forcing all 10,000 combinations of a 4-digit
+    PIN over the public internet takes days, without ever fully blocking a
+    legitimate floor worker."""
+    ip_address: str = Field(primary_key=True)
+    failure_count: int = Field(default=0)
+    last_attempt_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class FinancialRecord(SQLModel, table=True):

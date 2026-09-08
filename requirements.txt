@@ -8,3 +8,5 @@ python-multipart
 pytest
 httpx
 python-dotenv
+psycopg2-binary
+boto3

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { FinancialSummary, WallSet, listFinancials, listWallSets } from "../api";
+import { Link, useNavigate } from "react-router-dom";
+import { FinancialSummary, WallSet, isUnauthorizedError, listFinancials, listWallSets } from "../api";
 
 function formatRoi(roi: number | null): string {
   return roi === null ? "Not yet calculated" : `${(roi * 100).toFixed(1)}%`;
@@ -10,11 +10,16 @@ function formatMoney(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
-export default function Financials() {
+interface FinancialsProps {
+  onAuthError: () => void;
+}
+
+export default function Financials({ onAuthError }: FinancialsProps) {
   const [wallSets, setWallSets] = useState<WallSet[]>([]);
   const [records, setRecords] = useState<FinancialSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     setLoading(true);
@@ -24,9 +29,20 @@ export default function Financials() {
         setWallSets(ws);
         setRecords(fin);
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => {
+        if (isUnauthorizedError(e)) {
+          // The nav still thinks we're logged in (that's stale) -- a real,
+          // fresh 401 here means the session isn't actually valid anymore.
+          // Resync the nav and send the user to log back in instead of
+          // just showing a raw error under a "Logged in" nav.
+          onAuthError();
+          navigate("/login");
+          return;
+        }
+        setError(String(e));
+      })
       .finally(() => setLoading(false));
-  }, []);
+  }, [navigate, onAuthError]);
 
   if (loading) return <p className="muted">Loading...</p>;
 

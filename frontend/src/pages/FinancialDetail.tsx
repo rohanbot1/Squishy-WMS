@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   SquishyType,
   WallSet,
   getFinancials,
   getWallSet,
+  isUnauthorizedError,
   listSquishyTypes,
   upsertFinancials,
 } from "../api";
@@ -21,9 +22,14 @@ function formatMoney(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
-export default function FinancialDetail() {
+interface FinancialDetailProps {
+  onAuthError: () => void;
+}
+
+export default function FinancialDetail({ onAuthError }: FinancialDetailProps) {
   const { wallSetId } = useParams<{ wallSetId: string }>();
   const id = Number(wallSetId);
+  const navigate = useNavigate();
 
   const [wallSet, setWallSet] = useState<WallSet | null>(null);
   const [squishyTypes, setSquishyTypes] = useState<SquishyType[]>([]);
@@ -67,9 +73,16 @@ export default function FinancialDetail() {
           setItemCosts(costs);
         }
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => {
+        if (isUnauthorizedError(e)) {
+          onAuthError();
+          navigate("/login");
+          return;
+        }
+        setError(String(e));
+      })
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, navigate, onAuthError]);
 
   const giveawayTypes = squishyTypes.filter((t) => t.is_giveaway_item);
 
@@ -105,6 +118,11 @@ export default function FinancialDetail() {
       });
       setSaved(true);
     } catch (e) {
+      if (isUnauthorizedError(e)) {
+        onAuthError();
+        navigate("/login");
+        return;
+      }
       setError(String(e));
     } finally {
       setSaving(false);

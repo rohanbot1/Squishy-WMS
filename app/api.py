@@ -3,10 +3,10 @@ FastAPI wrapper around the Phase 1 engine. No business logic lives here --
 every route just validates input, calls into models/order_ingest/
 matching_engine/barcode_gen/label_export, and shapes the response.
 
-The floor screens (Wall Builder, Packer Scan, Shipments) are deliberately
-unauthenticated -- this runs on a trusted warehouse machine. auth.py's
-require_admin dependency exists for the future admin/financials view; see
-/auth/me below for the pattern any such route would reuse.
+Two independent, non-stacking auth tiers -- see app/auth.py's module
+docstring for the full reasoning. `router` holds auth routes (both tiers)
+and the admin-only financials routes; `floor_router` holds Wall Builder /
+Packer Scan / Shipments, gated as a whole via its `dependencies=`.
 """
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -14,17 +14,19 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from .database import get_session, init_db
 from . import storage
 from .auth import (
-    clear_session_cookie, create_session, delete_session, get_admin_password_hash,
-    require_admin, set_session_cookie, verify_password, COOKIE_NAME,
+    clear_session_cookie, client_ip, create_floor_session, create_session,
+    delete_session, get_admin_password_hash, require_admin, require_floor_access,
+    set_floor_session_cookie, set_session_cookie, verify_floor_pin, verify_password,
+    COOKIE_NAME,
 )
 from .barcode_gen import generate_label_sheet_pdf
 from .label_export import extract_label_and_packing_slip
@@ -49,13 +51,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Squishy WMS", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Every API route lives under /api -- the frontend's page routes (/scan,
+# /financials, /login, ...) and the API's own routes (GET /financials,
+# POST /wall-sets, ...) would otherwise collide on identical bare paths
+# once frontend and backend are served from the same origin (the local
+# Vite proxy, and the single Render service in production). No CORS
+# middleware either: with a same-origin proxy locally and a single
+# service in production, nothing ever makes a cross-origin request
+# anymore, so there's no cross-origin case to configure for.
+router = APIRouter(prefix="/api")
+
+# Every Wall Builder / Packer Scan / Shipments route goes on this router
+# instead -- gated as a whole via `dependencies=`, so "is every one of
+# these actually behind the floor PIN" is answerable by which router a
+# route is declared on, not by checking each route by hand for a
+# decorator that might have been missed.
+floor_router = APIRouter(prefix="/api", dependencies=[Depends(require_floor_access)])
 
 
 # --- request/response bodies -------------------------------------------------
@@ -84,6 +95,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class FloorLoginRequest(BaseModel):
+    pin: str
+
+
 class ItemCostInput(BaseModel):
     squishy_type_id: int
     unit_cost: float
@@ -104,7 +119,7 @@ class FinancialRecordUpsert(BaseModel):
 
 # --- auth ------------------------------------------------------------------
 
-@app.post("/auth/login")
+@router.post("/auth/login")
 def login(body: LoginRequest, response: Response, session: Session = Depends(get_session)):
     if not verify_password(body.password, get_admin_password_hash()):
         raise HTTPException(status_code=401, detail="Incorrect password")
@@ -114,7 +129,7 @@ def login(body: LoginRequest, response: Response, session: Session = Depends(get
     return {"authenticated": True}
 
 
-@app.post("/auth/logout")
+@router.post("/auth/logout")
 def logout(request: Request, response: Response, session: Session = Depends(get_session)):
     token = request.cookies.get(COOKIE_NAME)
     if token is not None:
@@ -123,8 +138,28 @@ def logout(request: Request, response: Response, session: Session = Depends(get_
     return {"authenticated": False}
 
 
-@app.get("/auth/me")
+@router.get("/auth/me")
 def me(admin_session=Depends(require_admin)):
+    return {"authenticated": True}
+
+
+@router.post("/auth/floor-login")
+def floor_login(
+    body: FloorLoginRequest, request: Request, response: Response,
+    session: Session = Depends(get_session),
+):
+    if not verify_floor_pin(session, client_ip(request), body.pin):
+        # Deliberately identical whether the PIN was wrong or the request
+        # arrived inside the current backoff delay -- see verify_floor_pin.
+        raise HTTPException(status_code=401, detail="Incorrect PIN")
+
+    floor_session = create_floor_session(session)
+    set_floor_session_cookie(response, floor_session.token)
+    return {"authenticated": True}
+
+
+@router.get("/auth/floor-me")
+def floor_me(floor_session=Depends(require_floor_access)):
     return {"authenticated": True}
 
 
@@ -161,7 +196,7 @@ def _next_internal_code(session: Session) -> str:
     return f"SQ{(max_id or 0) + 1:04d}"
 
 
-@app.post("/squishy-types")
+@floor_router.post("/squishy-types")
 def create_squishy_type(body: SquishyTypeCreate, session: Session = Depends(get_session)):
     existing = session.exec(
         select(SquishyType).where(SquishyType.name == body.name)
@@ -180,12 +215,12 @@ def create_squishy_type(body: SquishyTypeCreate, session: Session = Depends(get_
     return squishy_type
 
 
-@app.get("/squishy-types")
+@floor_router.get("/squishy-types")
 def list_squishy_types(session: Session = Depends(get_session)):
     return session.exec(select(SquishyType).order_by(SquishyType.name)).all()
 
 
-@app.get("/squishy-types/{squishy_type_id}/label-sheet")
+@floor_router.get("/squishy-types/{squishy_type_id}/label-sheet")
 def download_squishy_type_label_sheet(
     squishy_type_id: int, quantity: int = 1, session: Session = Depends(get_session)
 ):
@@ -195,24 +230,20 @@ def download_squishy_type_label_sheet(
     if quantity < 1:
         raise HTTPException(status_code=400, detail="quantity must be at least 1")
 
-    output_path = storage.squishy_type_label_sheet_pdf_path(squishy_type_id)
-    generate_label_sheet_pdf(
-        [{
-            "internal_code": squishy_type.internal_code,
-            "display_name": squishy_type.name,
-            "quantity": quantity,
-        }],
-        str(output_path),
-    )
-    return FileResponse(
-        output_path, media_type="application/pdf",
-        filename=f"{squishy_type.internal_code}.pdf",
+    pdf_bytes = generate_label_sheet_pdf([{
+        "internal_code": squishy_type.internal_code,
+        "display_name": squishy_type.name,
+        "quantity": quantity,
+    }])
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{squishy_type.internal_code}.pdf"'},
     )
 
 
 # --- wall sets -------------------------------------------------------------
 
-@app.post("/wall-sets")
+@floor_router.post("/wall-sets")
 def create_wall_set(body: WallSetCreate, session: Session = Depends(get_session)):
     wall_set = WallSet(label=body.label)
     session.add(wall_set)
@@ -233,18 +264,18 @@ def create_wall_set(body: WallSetCreate, session: Session = Depends(get_session)
     return {**wall_set.model_dump(), "items": _wall_set_items_payload(session, wall_set.id)}
 
 
-@app.get("/wall-sets")
+@floor_router.get("/wall-sets")
 def list_wall_sets(session: Session = Depends(get_session)):
     return session.exec(select(WallSet).order_by(WallSet.created_at.desc())).all()
 
 
-@app.get("/wall-sets/{wall_set_id}")
+@floor_router.get("/wall-sets/{wall_set_id}")
 def get_wall_set(wall_set_id: int, session: Session = Depends(get_session)):
     wall_set = _get_wall_set_or_404(session, wall_set_id)
     return {**wall_set.model_dump(), "items": _wall_set_items_payload(session, wall_set_id)}
 
 
-@app.get("/wall-sets/{wall_set_id}/shipments")
+@floor_router.get("/wall-sets/{wall_set_id}/shipments")
 def list_shipments(wall_set_id: int, session: Session = Depends(get_session)):
     _get_wall_set_or_404(session, wall_set_id)
 
@@ -281,40 +312,31 @@ def list_shipments(wall_set_id: int, session: Session = Depends(get_session)):
     ]
 
 
-@app.get("/wall-sets/{wall_set_id}/label-sheet")
+@floor_router.get("/wall-sets/{wall_set_id}/label-sheet")
 def download_label_sheet(wall_set_id: int, session: Session = Depends(get_session)):
     _get_wall_set_or_404(session, wall_set_id)
     items = _wall_set_items_payload(session, wall_set_id)
     if not items:
         raise HTTPException(status_code=400, detail="Wall set has no items to print labels for")
 
-    output_path = storage.label_sheet_pdf_path(wall_set_id)
-    generate_label_sheet_pdf(
+    pdf_bytes = generate_label_sheet_pdf(
         [{"internal_code": i["internal_code"], "display_name": i["name"], "quantity": i["quantity"]} for i in items],
-        str(output_path),
     )
-    return FileResponse(output_path, media_type="application/pdf", filename="label_sheet.pdf")
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="label_sheet.pdf"'},
+    )
 
 
-@app.post("/wall-sets/{wall_set_id}/upload")
-async def upload_orders(
-    wall_set_id: int,
-    csv_file: UploadFile = File(...),
-    pdf_file: UploadFile = File(...),
-    session: Session = Depends(get_session),
-):
-    wall_set = _get_wall_set_or_404(session, wall_set_id)
+async def _ingest_wall_set_upload(
+    session: Session, wall_set: WallSet, csv_bytes: bytes, pdf_bytes: bytes,
+) -> dict:
+    pdf_key = storage.save_wall_set_upload(wall_set.id, csv_bytes, pdf_bytes)
 
-    csv_path = storage.manifest_csv_path(wall_set_id)
-    csv_path.write_bytes(await csv_file.read())
+    ingest_summary = parse_csv_into_shipments(csv_bytes, wall_set.id, session)
+    labels_matched = attach_label_pages(session, wall_set.id, pdf_bytes)
 
-    pdf_path = storage.labels_pdf_path(wall_set_id)
-    pdf_path.write_bytes(await pdf_file.read())
-
-    ingest_summary = parse_csv_into_shipments(str(csv_path), wall_set_id, session)
-    labels_matched = attach_label_pages(session, wall_set_id, str(pdf_path))
-
-    wall_set.pdf_file_path = str(pdf_path)
+    wall_set.pdf_file_path = pdf_key
     wall_set.orders_uploaded = True
     session.add(wall_set)
     session.commit()
@@ -327,7 +349,42 @@ async def upload_orders(
     }
 
 
-@app.post("/wall-sets/{wall_set_id}/scan")
+@floor_router.post("/wall-sets/{wall_set_id}/upload")
+async def upload_orders(
+    wall_set_id: int,
+    csv_file: UploadFile = File(...),
+    pdf_file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+):
+    wall_set = _get_wall_set_or_404(session, wall_set_id)
+    return await _ingest_wall_set_upload(
+        session, wall_set, await csv_file.read(), await pdf_file.read(),
+    )
+
+
+@floor_router.post("/wall-sets/upload")
+async def upload_orders_new_wall_set(
+    csv_file: UploadFile = File(...),
+    pdf_file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+):
+    """Auto-creates a WallSet with no manifest, labeled by upload time --
+    for uploads that never went through a manual wall-build step. Every
+    manifest-quantity reader (Financials' item-cost table, the per-wall-set
+    label sheet) already treats an empty WallSetItem list as "nothing to
+    show", not an error, so this needs no other changes."""
+    label = f"Upload {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+    wall_set = WallSet(label=label)
+    session.add(wall_set)
+    session.flush()  # get wall_set.id before storage paths are computed
+
+    summary = await _ingest_wall_set_upload(
+        session, wall_set, await csv_file.read(), await pdf_file.read(),
+    )
+    return {**summary, "wall_set_id": wall_set.id, "wall_set_label": wall_set.label}
+
+
+@floor_router.post("/wall-sets/{wall_set_id}/scan")
 def scan(wall_set_id: int, body: ScanRequest, session: Session = Depends(get_session)):
     _get_wall_set_or_404(session, wall_set_id)
 
@@ -349,6 +406,7 @@ def scan(wall_set_id: int, body: ScanRequest, session: Session = Depends(get_ses
             "tracking_number": result.tracking_number,
             "bin_number": result.bin_number,
             "message": result.message,
+            "items": [{"name": i.name, "quantity": i.quantity} for i in result.items],
         }
 
     return {
@@ -356,10 +414,14 @@ def scan(wall_set_id: int, body: ScanRequest, session: Session = Depends(get_ses
         "shipment_id": result.shipment_id,
         "bin_number": result.bin_number,
         "message": result.message,
+        "remaining": [
+            {"name": r.name, "quantity_remaining": r.quantity_remaining}
+            for r in result.remaining
+        ],
     }
 
 
-@app.get("/wall-sets/{wall_set_id}/shipments/{shipment_id}/label")
+@floor_router.get("/wall-sets/{wall_set_id}/shipments/{shipment_id}/label")
 def download_shipment_label(wall_set_id: int, shipment_id: int, session: Session = Depends(get_session)):
     wall_set = _get_wall_set_or_404(session, wall_set_id)
     shipment = session.get(Shipment, shipment_id)
@@ -368,7 +430,8 @@ def download_shipment_label(wall_set_id: int, shipment_id: int, session: Session
     if shipment.pdf_label_page_index is None or wall_set.pdf_file_path is None:
         raise HTTPException(status_code=400, detail="No label page available for this shipment yet")
 
-    pdf_bytes = extract_label_and_packing_slip(wall_set.pdf_file_path, shipment.pdf_label_page_index)
+    master_pdf_bytes = storage.read_pdf(wall_set.pdf_file_path)
+    pdf_bytes = extract_label_and_packing_slip(master_pdf_bytes, shipment.pdf_label_page_index)
     return Response(content=pdf_bytes, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="{shipment.tracking_number}.pdf"'
     })
@@ -446,7 +509,7 @@ def _financial_record_payload(session: Session, record: FinancialRecord) -> dict
     }
 
 
-@app.put("/wall-sets/{wall_set_id}/financials")
+@router.put("/wall-sets/{wall_set_id}/financials")
 def upsert_financials(
     wall_set_id: int, body: FinancialRecordUpsert,
     session: Session = Depends(get_session), admin_session=Depends(require_admin),
@@ -498,7 +561,7 @@ def upsert_financials(
     return _financial_record_payload(session, record)
 
 
-@app.get("/wall-sets/{wall_set_id}/financials")
+@router.get("/wall-sets/{wall_set_id}/financials")
 def get_financials(
     wall_set_id: int, session: Session = Depends(get_session), admin_session=Depends(require_admin),
 ):
@@ -511,7 +574,7 @@ def get_financials(
     return _financial_record_payload(session, record)
 
 
-@app.get("/financials")
+@router.get("/financials")
 def list_financials(session: Session = Depends(get_session), admin_session=Depends(require_admin)):
     rows = session.exec(
         select(FinancialRecord, WallSet)
@@ -532,3 +595,38 @@ def list_financials(session: Session = Depends(get_session), admin_session=Depen
             "roi": payload["roi"],
         })
     return summaries
+
+
+app.include_router(router)
+app.include_router(floor_router)
+
+# Serves the built frontend (frontend/dist, from `npm run build`) so a
+# single Render service can host both the API and the UI -- no separate
+# static-hosting service, no cross-origin requests to configure. Only
+# present when frontend/dist actually exists: local dev never builds it
+# (Vite's own dev server + proxy serves the frontend there instead, see
+# frontend/vite.config.ts), so this stays a no-op and doesn't error on a
+# missing directory outside of a production-style build+run.
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if FRONTEND_DIST.is_dir():
+    # Vite's hashed JS/CSS bundles -- served directly, no fallback needed
+    # since the browser only ever requests exact filenames it got from
+    # index.html.
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="frontend-assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        """Every page route (/scan, /financials, /login, a page reload on
+        any of them, ...) is handled client-side by React Router, so any
+        path that isn't a real API route just gets index.html and lets
+        the frontend's own router take it from there.
+
+        Guards against /api/* falling through to this catch-all: without
+        it, a genuinely-missing API route (typo, wrong method) would
+        silently return the SPA's index.html with a 200 instead of a real
+        404, masking API errors as if the frontend just failed to load.
+        """
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        return FileResponse(FRONTEND_DIST / "index.html")
