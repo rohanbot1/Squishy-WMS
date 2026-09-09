@@ -52,7 +52,11 @@ export default function FinancialDetail({ onAuthError }: FinancialDetailProps) {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    Promise.all([getWallSet(id), listSquishyTypes(), getFinancials(id)])
+    // include_inactive=true: a wall set's giveaway or item costs can
+    // reference a squishy type that's since been deactivated, and this
+    // page needs to keep resolving/displaying that reference correctly,
+    // not just what's currently active.
+    Promise.all([getWallSet(id), listSquishyTypes(true), getFinancials(id)])
       .then(([ws, types, record]) => {
         setWallSet(ws);
         setSquishyTypes(types);
@@ -200,6 +204,7 @@ export default function FinancialDetail({ onAuthError }: FinancialDetailProps) {
                 {giveawayTypes.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
+                    {!t.active ? " (deactivated)" : ""}
                   </option>
                 ))}
               </select>

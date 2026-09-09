@@ -1,10 +1,14 @@
 import { FormEvent, useEffect, useState } from "react";
 import {
+  ApiError,
+  InactiveDuplicateDetail,
   SquishyType,
   UploadToNewWallSetSummary,
   createSquishyType,
+  deactivateSquishyType,
   downloadSquishyTypeLabelSheet,
   listSquishyTypes,
+  reactivateSquishyType,
   triggerBlobDownload,
   uploadOrdersToNewWallSet,
 } from "../api";
@@ -22,9 +26,19 @@ export default function WallBuilder({ onAuthError }: WallBuilderProps) {
   const [error, setError] = useState<string | null>(null);
 
   const [newTypeName, setNewTypeName] = useState("");
+  const [duplicatePrompt, setDuplicatePrompt] = useState<InactiveDuplicateDetail | null>(null);
 
   const [printQuantities, setPrintQuantities] = useState<Record<number, string>>({});
   const [printingTypeId, setPrintingTypeId] = useState<number | null>(null);
+  const [deactivatingId, setDeactivatingId] = useState<number | null>(null);
+  const [reactivatingId, setReactivatingId] = useState<number | null>(null);
+
+  // Deactivated types are deliberately not part of the default fetch --
+  // only loaded on demand when this is toggled on, so the catalog's main
+  // view stays lean as more weekly types get retired instead of growing
+  // unbounded (see app/api.py's include_inactive param).
+  const [showDeactivated, setShowDeactivated] = useState(false);
+  const [deactivatedTypes, setDeactivatedTypes] = useState<SquishyType[]>([]);
 
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -35,22 +49,75 @@ export default function WallBuilder({ onAuthError }: WallBuilderProps) {
     refreshSquishyTypes();
   }, []);
 
+  useEffect(() => {
+    if (showDeactivated) refreshDeactivatedTypes();
+  }, [showDeactivated]);
+
   function refreshSquishyTypes() {
     listSquishyTypes()
       .then(setSquishyTypes)
       .catch((e) => handleAuthAwareError(e, setError));
   }
 
+  function refreshDeactivatedTypes() {
+    listSquishyTypes(true)
+      .then((types) => setDeactivatedTypes(types.filter((t) => !t.active)))
+      .catch((e) => handleAuthAwareError(e, setError));
+  }
+
   async function handleCreateSquishyType(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    setDuplicatePrompt(null);
     if (!newTypeName.trim()) return;
     try {
       await createSquishyType({ name: newTypeName.trim() });
       setNewTypeName("");
       refreshSquishyTypes();
     } catch (e) {
+      if (
+        e instanceof ApiError &&
+        e.status === 409 &&
+        typeof e.detail === "object" &&
+        e.detail !== null &&
+        (e.detail as InactiveDuplicateDetail).reason === "inactive_duplicate"
+      ) {
+        setDuplicatePrompt(e.detail as InactiveDuplicateDetail);
+      } else {
+        handleAuthAwareError(e, setError);
+      }
+    }
+  }
+
+  async function handleDeactivate(squishyType: SquishyType) {
+    setError(null);
+    setDeactivatingId(squishyType.id);
+    try {
+      await deactivateSquishyType(squishyType.id);
+      refreshSquishyTypes();
+      if (showDeactivated) refreshDeactivatedTypes();
+    } catch (e) {
       handleAuthAwareError(e, setError);
+    } finally {
+      setDeactivatingId(null);
+    }
+  }
+
+  async function handleReactivate(squishyTypeId: number) {
+    setError(null);
+    setReactivatingId(squishyTypeId);
+    try {
+      await reactivateSquishyType(squishyTypeId);
+      refreshSquishyTypes();
+      refreshDeactivatedTypes();
+      setDuplicatePrompt((current) => (current?.squishy_type_id === squishyTypeId ? null : current));
+      if (duplicatePrompt?.squishy_type_id === squishyTypeId) {
+        setNewTypeName("");
+      }
+    } catch (e) {
+      handleAuthAwareError(e, setError);
+    } finally {
+      setReactivatingId(null);
     }
   }
 
@@ -112,6 +179,23 @@ export default function WallBuilder({ onAuthError }: WallBuilderProps) {
             {t("wallBuilder.addType")}
           </button>
         </form>
+
+        {duplicatePrompt && (
+          <p className="pill error" style={{ marginTop: "0.5rem" }}>
+            {duplicatePrompt.message}{" "}
+            <button
+              type="button"
+              className="secondary"
+              disabled={reactivatingId === duplicatePrompt.squishy_type_id}
+              onClick={() => handleReactivate(duplicatePrompt.squishy_type_id)}
+            >
+              {reactivatingId === duplicatePrompt.squishy_type_id
+                ? t("wallBuilder.reactivating")
+                : t("wallBuilder.reactivateThisType")}
+            </button>
+          </p>
+        )}
+
         <p className="muted">{t("wallBuilder.catalogCount", { count: squishyTypes.length })}</p>
 
         {squishyTypes.length > 0 && (
@@ -120,6 +204,7 @@ export default function WallBuilder({ onAuthError }: WallBuilderProps) {
               <tr>
                 <th>{t("wallBuilder.tableName")}</th>
                 <th>{t("wallBuilder.tableQuantity")}</th>
+                <th></th>
                 <th></th>
               </tr>
             </thead>
@@ -148,10 +233,63 @@ export default function WallBuilder({ onAuthError }: WallBuilderProps) {
                       {printingTypeId === t2.id ? t("wallBuilder.printing") : t("wallBuilder.printBarcode")}
                     </button>
                   </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={deactivatingId === t2.id}
+                      onClick={() => handleDeactivate(t2)}
+                    >
+                      {deactivatingId === t2.id ? t("wallBuilder.deactivating") : t("wallBuilder.deactivate")}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        )}
+
+        <button
+          type="button"
+          className="secondary"
+          style={{ marginTop: "0.75rem" }}
+          onClick={() => setShowDeactivated((s) => !s)}
+        >
+          {showDeactivated ? t("wallBuilder.showActive") : t("wallBuilder.showDeactivated")}
+        </button>
+
+        {showDeactivated && (
+          <div style={{ marginTop: "0.75rem" }}>
+            {deactivatedTypes.length === 0 ? (
+              <p className="muted">{t("wallBuilder.noDeactivatedTypes")}</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t("wallBuilder.tableName")}</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deactivatedTypes.map((t2) => (
+                    <tr key={t2.id}>
+                      <td>{t2.name}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="secondary"
+                          disabled={reactivatingId === t2.id}
+                          onClick={() => handleReactivate(t2.id)}
+                        >
+                          {reactivatingId === t2.id ? t("wallBuilder.reactivating") : t("wallBuilder.reactivate")}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         )}
       </section>
 

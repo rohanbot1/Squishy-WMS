@@ -23,6 +23,13 @@ class SquishyType(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     internal_code: str = Field(unique=True)  # what actually gets encoded in the barcode
     is_giveaway_item: bool = Field(default=False)  # e.g. the recurring butter giveaway
+    # Soft-delete flag, not a real delete -- types are referenced by
+    # historical Shipments, ScanEvents, and FinancialRecords that all need
+    # to keep displaying correctly forever. Deactivating only removes a
+    # type from the catalog/wall-builder picker; the name stays reserved
+    # (still unique) so a type can't be "recreated" as a distinct row --
+    # see the reactivate-on-duplicate-name handling in app/api.py.
+    active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     @staticmethod

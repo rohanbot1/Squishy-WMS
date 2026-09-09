@@ -9,7 +9,18 @@ export interface SquishyType {
   name: string;
   internal_code: string;
   is_giveaway_item: boolean;
+  active: boolean;
   created_at: string;
+}
+
+// The shape POST /squishy-types returns as its 409 `detail` when the
+// name collides with a *deactivated* type instead of an active one --
+// distinguishable from the plain string `detail` on every other error so
+// the caller can offer a reactivate action instead of a dead-end message.
+export interface InactiveDuplicateDetail {
+  reason: "inactive_duplicate";
+  squishy_type_id: number;
+  message: string;
 }
 
 export interface WallSetItem {
@@ -143,11 +154,35 @@ export type ScanResponse =
       items: ShipmentItem[];
     };
 
+// Thrown by request() on any non-2xx response. `detail` carries whatever
+// FastAPI's `detail=` actually was: usually a plain string, but a route
+// can also return a structured object (see InactiveDuplicateDetail) for
+// an error a caller needs to branch on instead of just display.
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(status: number, statusText: string, detail: unknown) {
+    const readable = typeof detail === "string" ? detail : JSON.stringify(detail);
+    super(`${status} ${statusText}: ${readable}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, { credentials: "include", ...init });
   if (!resp.ok) {
-    const detail = await resp.text();
-    throw new Error(`${resp.status} ${resp.statusText}: ${detail}`);
+    const text = await resp.text();
+    let detail: unknown = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === "object" && "detail" in parsed) detail = parsed.detail;
+    } catch {
+      // Not JSON -- keep the raw text as the detail.
+    }
+    throw new ApiError(resp.status, resp.statusText, detail);
   }
   return resp.json() as Promise<T>;
 }
@@ -163,8 +198,8 @@ export function isUnauthorizedError(e: unknown): boolean {
   return e instanceof Error && e.message.startsWith("401");
 }
 
-export function listSquishyTypes(): Promise<SquishyType[]> {
-  return request("/squishy-types");
+export function listSquishyTypes(includeInactive = false): Promise<SquishyType[]> {
+  return request(`/squishy-types${includeInactive ? "?include_inactive=true" : ""}`);
 }
 
 export function createSquishyType(body: {
@@ -176,6 +211,14 @@ export function createSquishyType(body: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+export function deactivateSquishyType(id: number): Promise<SquishyType> {
+  return request(`/squishy-types/${id}/deactivate`, { method: "POST" });
+}
+
+export function reactivateSquishyType(id: number): Promise<SquishyType> {
+  return request(`/squishy-types/${id}/reactivate`, { method: "POST" });
 }
 
 export function listWallSets(): Promise<WallSet[]> {

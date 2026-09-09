@@ -202,7 +202,20 @@ def create_squishy_type(body: SquishyTypeCreate, session: Session = Depends(get_
         select(SquishyType).where(SquishyType.name == body.name)
     ).first()
     if existing:
-        raise HTTPException(status_code=409, detail="A squishy type with this name already exists")
+        if existing.active:
+            raise HTTPException(status_code=409, detail="A squishy type with this name already exists")
+        # The name is still reserved (unique) by the deactivated row --
+        # don't let this fail as a generic conflict with no way forward.
+        # Distinguishable detail shape so the frontend can offer a
+        # reactivate action instead of a dead-end error.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "inactive_duplicate",
+                "squishy_type_id": existing.id,
+                "message": f'"{body.name}" already exists, deactivated.',
+            },
+        )
 
     squishy_type = SquishyType(
         name=body.name,
@@ -216,8 +229,41 @@ def create_squishy_type(body: SquishyTypeCreate, session: Session = Depends(get_
 
 
 @floor_router.get("/squishy-types")
-def list_squishy_types(session: Session = Depends(get_session)):
-    return session.exec(select(SquishyType).order_by(SquishyType.name)).all()
+def list_squishy_types(include_inactive: bool = False, session: Session = Depends(get_session)):
+    query = select(SquishyType).order_by(SquishyType.name)
+    if not include_inactive:
+        query = query.where(SquishyType.active == True)  # noqa: E712 -- SQLAlchemy needs `== True`, not `is True`
+    return session.exec(query).all()
+
+
+@floor_router.post("/squishy-types/{squishy_type_id}/deactivate")
+def deactivate_squishy_type(squishy_type_id: int, session: Session = Depends(get_session)):
+    """Removes a type from the active catalog/wall-builder picker without
+    touching its data -- every historical Shipment/ScanEvent/
+    FinancialRecord reference keeps resolving through it exactly as
+    before (see order_ingest.py and matching_engine.py, neither of which
+    filters by `active`). Idempotent: deactivating an already-inactive
+    type just returns its current state, no error."""
+    squishy_type = session.get(SquishyType, squishy_type_id)
+    if squishy_type is None:
+        raise HTTPException(status_code=404, detail="Squishy type not found")
+    squishy_type.active = False
+    session.add(squishy_type)
+    session.commit()
+    session.refresh(squishy_type)
+    return squishy_type
+
+
+@floor_router.post("/squishy-types/{squishy_type_id}/reactivate")
+def reactivate_squishy_type(squishy_type_id: int, session: Session = Depends(get_session)):
+    squishy_type = session.get(SquishyType, squishy_type_id)
+    if squishy_type is None:
+        raise HTTPException(status_code=404, detail="Squishy type not found")
+    squishy_type.active = True
+    session.add(squishy_type)
+    session.commit()
+    session.refresh(squishy_type)
+    return squishy_type
 
 
 @floor_router.get("/squishy-types/{squishy_type_id}/label-sheet")

@@ -398,6 +398,113 @@ def test_create_squishy_type_without_internal_code_auto_generates_one(client):
     assert resp2.json()["internal_code"] != body["internal_code"]
 
 
+def test_new_squishy_type_defaults_active(client):
+    resp = client.post("/api/squishy-types", json={"name": "Fresh", "internal_code": "SQF0"})
+    assert resp.json()["active"] is True
+
+
+def test_deactivate_hides_type_from_default_list_but_not_include_inactive(client):
+    t = client.post("/api/squishy-types", json={"name": "Seasonal", "internal_code": "SQS0"}).json()
+
+    resp = client.post(f"/api/squishy-types/{t['id']}/deactivate")
+    assert resp.status_code == 200
+    assert resp.json()["active"] is False
+
+    default_names = [x["name"] for x in client.get("/api/squishy-types").json()]
+    assert "Seasonal" not in default_names
+
+    all_names = [x["name"] for x in client.get("/api/squishy-types?include_inactive=true").json()]
+    assert "Seasonal" in all_names
+
+
+def test_reactivate_brings_type_back_into_default_list(client):
+    t = client.post("/api/squishy-types", json={"name": "Comeback", "internal_code": "SQC0"}).json()
+    client.post(f"/api/squishy-types/{t['id']}/deactivate")
+    assert "Comeback" not in [x["name"] for x in client.get("/api/squishy-types").json()]
+
+    resp = client.post(f"/api/squishy-types/{t['id']}/reactivate")
+    assert resp.status_code == 200
+    assert resp.json()["active"] is True
+    assert "Comeback" in [x["name"] for x in client.get("/api/squishy-types").json()]
+
+
+def test_deactivate_and_reactivate_are_idempotent(client):
+    t = client.post("/api/squishy-types", json={"name": "Steady", "internal_code": "SQST"}).json()
+
+    assert client.post(f"/api/squishy-types/{t['id']}/deactivate").status_code == 200
+    assert client.post(f"/api/squishy-types/{t['id']}/deactivate").status_code == 200  # already inactive, no error
+
+    assert client.post(f"/api/squishy-types/{t['id']}/reactivate").status_code == 200
+    assert client.post(f"/api/squishy-types/{t['id']}/reactivate").status_code == 200  # already active, no error
+
+
+def test_deactivate_and_reactivate_unknown_type_404s(client):
+    assert client.post("/api/squishy-types/999999/deactivate").status_code == 404
+    assert client.post("/api/squishy-types/999999/reactivate").status_code == 404
+
+
+def test_create_with_name_matching_active_type_is_plain_409(client):
+    client.post("/api/squishy-types", json={"name": "Still Here", "internal_code": "SQSH"})
+    resp = client.post("/api/squishy-types", json={"name": "Still Here", "internal_code": "SQSH2"})
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "A squishy type with this name already exists"
+
+
+def test_create_with_name_matching_deactivated_type_offers_reactivation(client):
+    t = client.post("/api/squishy-types", json={"name": "Retired", "internal_code": "SQR0"}).json()
+    client.post(f"/api/squishy-types/{t['id']}/deactivate")
+
+    resp = client.post("/api/squishy-types", json={"name": "Retired", "internal_code": "SQR1"})
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["reason"] == "inactive_duplicate"
+    assert detail["squishy_type_id"] == t["id"]
+
+    # the name still isn't usable for a genuinely new row -- the caller
+    # must reactivate the existing one, not get a fresh row under the
+    # same name
+    reactivate = client.post(f"/api/squishy-types/{t['id']}/reactivate")
+    assert reactivate.status_code == 200
+    assert "Retired" in [x["name"] for x in client.get("/api/squishy-types").json()]
+    # still exactly one row for this name, not two
+    all_types = client.get("/api/squishy-types?include_inactive=true").json()
+    assert len([x for x in all_types if x["name"] == "Retired"]) == 1
+
+
+def test_deactivated_type_still_shows_correctly_in_wall_set_items_and_financials(admin_client):
+    """The whole point of soft-deactivation: historical references must
+    keep displaying exactly as before, only the catalog/wall-builder
+    picker should change. Financials is admin-gated, so this needs
+    admin_client (which is also floor-authenticated) rather than client."""
+    t1 = admin_client.post("/api/squishy-types", json={"name": "Legacy Item", "internal_code": "SQL0"}).json()
+
+    wall_set = admin_client.post("/api/wall-sets", json={
+        "label": "legacy wall",
+        "items": [{"squishy_type_id": t1["id"], "quantity": 4}],
+    }).json()
+
+    admin_client.post(f"/api/squishy-types/{t1['id']}/deactivate")
+
+    # wall-set items payload still shows the real name, unaffected by deactivation
+    fetched = admin_client.get(f"/api/wall-sets/{wall_set['id']}").json()
+    assert fetched["items"] == [{
+        "squishy_type_id": t1["id"], "name": "Legacy Item",
+        "internal_code": "SQL0", "quantity": 4,
+    }]
+
+    financials_body = {
+        "streamer": "Binit", "stream_started_at": "2026-01-01T00:00:00",
+        "stream_ended_at": "2026-01-01T01:00:00", "revenue": 100.0, "fees": 5.0,
+        "bid_average": 1.0, "giveaway_squishy_type_id": t1["id"], "giveaway_quantity": 1,
+        "item_costs": [{"squishy_type_id": t1["id"], "unit_cost": 2.0}],
+    }
+    resp = admin_client.put(f"/api/wall-sets/{wall_set['id']}/financials", json=financials_body)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["giveaway"] == {"squishy_type_id": t1["id"], "name": "Legacy Item", "quantity": 1}
+    assert {i["squishy_type_id"]: i["name"] for i in body["items"]} == {t1["id"]: "Legacy Item"}
+
+
 # --- wall sets ---------------------------------------------------------------
 
 def test_create_wall_set_with_items_and_fetch_it(client):
