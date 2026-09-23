@@ -97,28 +97,27 @@ export default function Shipments({ onAuthError }: ShipmentsProps) {
       <h1>Shipments</h1>
       {error && <p className="error-text">{error}</p>}
 
-      <section className="panel">
-        <label htmlFor="wall-set-select">Wall set</label>
-        <select
-          id="wall-set-select"
-          value={wallSetId}
-          onChange={(e) => {
-            setWallSetId(e.target.value ? Number(e.target.value) : "");
-            setExpandedIds(new Set());
-          }}
-        >
-          <option value="">Select a wall set...</option>
-          {uploadedWallSets.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.label} (#{w.id}, uploaded)
-            </option>
-          ))}
-        </select>
-      </section>
-
-      {wallSetId !== "" && (
-        <section className="panel">
-          <div className="row">
+      <section className="toolbar">
+        <div>
+          <label htmlFor="wall-set-select">Wall set</label>
+          <select
+            id="wall-set-select"
+            value={wallSetId}
+            onChange={(e) => {
+              setWallSetId(e.target.value ? Number(e.target.value) : "");
+              setExpandedIds(new Set());
+            }}
+          >
+            <option value="">Select a wall set...</option>
+            {uploadedWallSets.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.label} (#{w.id}, uploaded)
+              </option>
+            ))}
+          </select>
+        </div>
+        {wallSetId !== "" && (
+          <>
             <div>
               <label htmlFor="status-filter">Status</label>
               <select
@@ -131,55 +130,60 @@ export default function Shipments({ onAuthError }: ShipmentsProps) {
                 <option value="all">All</option>
               </select>
             </div>
-            <div>
+            <div className="field-grow">
               <label htmlFor="tracking-search">Search tracking number</label>
               <input
                 id="tracking-search"
+                className="mono"
                 type="text"
                 placeholder="e.g. 9200190..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
-          </div>
+          </>
+        )}
+      </section>
 
+      {wallSetId !== "" && (
+        <section className="panel">
           {loading ? (
-            <p className="muted" style={{ marginTop: "1rem" }}>
-              Loading...
-            </p>
+            <p className="muted">Loading...</p>
           ) : (
             <>
-              <p className="muted" style={{ marginTop: "1rem" }}>
-                {filtered.length} of {shipments.length} shipment(s) shown.
-              </p>
+              <div className="region-head">
+                <p className="muted">
+                  {filtered.length} of {shipments.length} shipment(s) shown.
+                </p>
+              </div>
 
-              <table style={{ marginTop: "0.5rem" }}>
+              <table className="sticky-head">
                 <thead>
                   <tr>
                     <th>Tracking number</th>
                     <th>Status</th>
-                    <th>Bin</th>
-                    <th>Items</th>
+                    <th className="num">Bin</th>
+                    <th className="num">Items</th>
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((shipment) => (
                     <Fragment key={shipment.id}>
-                      <tr>
-                        <td>{shipment.tracking_number}</td>
+                      <tr className={`status-row${shipment.is_complete ? " is-complete" : ""}`}>
+                        <td className="mono">{shipment.tracking_number}</td>
                         <td>
-                          <span className={`pill ${shipment.is_complete ? "ok" : "warn"}`}>
+                          <span className={`status-text ${shipment.is_complete ? "ok" : "warn"}`}>
                             {shipment.is_complete ? "Complete" : "Open"}
                           </span>
                         </td>
-                        <td>{shipment.bin_number ?? "--"}</td>
-                        <td>{shipment.requirements.length}</td>
-                        <td>
+                        <td className="num">{shipment.bin_number ?? "--"}</td>
+                        <td className="num">{shipment.requirements.length}</td>
+                        <td className="actions">
                           <div className="row">
                             <button
                               type="button"
-                              className="secondary"
+                              className="quiet"
                               onClick={() => toggleExpanded(shipment.id)}
                             >
                               {expandedIds.has(shipment.id) ? "Hide" : "Details"}
@@ -187,7 +191,7 @@ export default function Shipments({ onAuthError }: ShipmentsProps) {
                             {shipment.is_complete && (
                               <button
                                 type="button"
-                                className="secondary"
+                                className="quiet"
                                 disabled={downloadingId === shipment.id}
                                 onClick={() => handleDownloadLabel(shipment)}
                               >
@@ -198,22 +202,22 @@ export default function Shipments({ onAuthError }: ShipmentsProps) {
                         </td>
                       </tr>
                       {expandedIds.has(shipment.id) && (
-                        <tr>
+                        <tr className="detail-row">
                           <td colSpan={5}>
                             <table>
                               <thead>
                                 <tr>
                                   <th>Squishy type</th>
-                                  <th>Required</th>
-                                  <th>Scanned</th>
+                                  <th className="num">Required</th>
+                                  <th className="num">Scanned</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {shipment.requirements.map((r) => (
                                   <tr key={r.squishy_type_id}>
                                     <td>{r.name}</td>
-                                    <td>{r.quantity_required}</td>
-                                    <td>{r.quantity_scanned}</td>
+                                    <td className="num">{r.quantity_required}</td>
+                                    <td className="num">{r.quantity_scanned}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -227,7 +231,7 @@ export default function Shipments({ onAuthError }: ShipmentsProps) {
               </table>
 
               {filtered.length === 0 && (
-                <p className="muted" style={{ marginTop: "0.75rem" }}>
+                <p className="muted">
                   No shipments match this filter.
                 </p>
               )}

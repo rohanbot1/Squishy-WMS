@@ -17,6 +17,10 @@ export default function PackerScan({ onAuthError }: PackerScanProps) {
   const [lastResult, setLastResult] = useState<ScanResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Display-only: bumped on every scan result and used as the result
+  // panel's React key, so its resolve animation replays even when two
+  // consecutive scans return the same status. Never read by any logic.
+  const [scanSeq, setScanSeq] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -45,6 +49,7 @@ export default function PackerScan({ onAuthError }: PackerScanProps) {
     try {
       const result = await scanBarcode(wallSetId, scanned);
       setLastResult(result);
+      setScanSeq((n) => n + 1);
 
       if (result.status === "complete") {
         const blob = await downloadShipmentLabel(wallSetId, result.shipment_id);
@@ -95,27 +100,29 @@ export default function PackerScan({ onAuthError }: PackerScanProps) {
       <h1>Packer Scan</h1>
       {error && <p className="error-text">{error}</p>}
 
-      <section className="panel">
-        <label htmlFor="wall-set-select">{t("packerScan.wallSetLabel")}</label>
-        <select
-          id="wall-set-select"
-          value={wallSetId}
-          onChange={(e) => {
-            setWallSetId(e.target.value ? Number(e.target.value) : "");
-            setLastResult(null);
-          }}
-        >
-          <option value="">{t("packerScan.wallSetPlaceholder")}</option>
-          {uploadedWallSets.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.label} (#{w.id}, {t("packerScan.uploaded")})
-            </option>
-          ))}
-        </select>
+      <section className="toolbar">
+        <div>
+          <label htmlFor="wall-set-select">{t("packerScan.wallSetLabel")}</label>
+          <select
+            id="wall-set-select"
+            value={wallSetId}
+            onChange={(e) => {
+              setWallSetId(e.target.value ? Number(e.target.value) : "");
+              setLastResult(null);
+            }}
+          >
+            <option value="">{t("packerScan.wallSetPlaceholder")}</option>
+            {uploadedWallSets.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.label} (#{w.id}, {t("packerScan.uploaded")})
+              </option>
+            ))}
+          </select>
+        </div>
       </section>
 
       {wallSetId !== "" && (
-        <section className="panel">
+        <section className="scan-station">
           <form onSubmit={handleScanSubmit}>
             <label htmlFor="barcode-input">{t("packerScan.scanLabel")}</label>
             <input
@@ -132,11 +139,17 @@ export default function PackerScan({ onAuthError }: PackerScanProps) {
           </form>
 
           {lastResult && (
-            <div className={`scan-result status-${lastResult.status}`}>
-              {lastResult.status === "in_progress" && (
-                <div className="bin-number">{t("packerScan.bin", { n: lastResult.bin_number })}</div>
-              )}
-              <div>{resultLabel(lastResult)}</div>
+            <div key={scanSeq} className={`scan-result status-${lastResult.status}`}>
+              <div className="scan-result-body">
+                {/* Big numeral for a bin still filling, and again when that
+                    bundle completes -- so a bin can be followed through to
+                    confirmation. Single-item completions have no bin. */}
+                {(lastResult.status === "in_progress" ||
+                  (lastResult.status === "complete" && lastResult.bin_number != null)) && (
+                  <div className="bin-number">{t("packerScan.bin", { n: lastResult.bin_number! })}</div>
+                )}
+                <div className="scan-result-message">{resultLabel(lastResult)}</div>
+              </div>
             </div>
           )}
         </section>

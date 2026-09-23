@@ -158,145 +158,144 @@ export default function WallBuilder({ onAuthError }: WallBuilderProps) {
       <h1>Wall Builder</h1>
       {error && <p className="error-text">{error}</p>}
 
-      <section className="panel">
-        <h2>{t("wallBuilder.catalogHeading")}</h2>
-        <form className="row" onSubmit={handleCreateSquishyType}>
-          <div>
-            <label htmlFor="type-name">{t("wallBuilder.displayNameLabel")}</label>
-            <input
-              id="type-name"
-              type="text"
-              placeholder={t("wallBuilder.displayNamePlaceholder")}
-              value={newTypeName}
-              onChange={(e) => setNewTypeName(e.target.value)}
-            />
+      <div className="wb-grid">
+        <section className="panel">
+          <div className="region-head">
+            <h2>{t("wallBuilder.catalogHeading")}</h2>
+            <p className="muted">{t("wallBuilder.catalogCount", { count: squishyTypes.length })}</p>
           </div>
-          <button
-            type="submit"
-            style={{ marginTop: "1.2rem" }}
-            disabled={!newTypeName.trim()}
-          >
-            {t("wallBuilder.addType")}
-          </button>
-        </form>
-
-        {duplicatePrompt && (
-          <p className="pill error" style={{ marginTop: "0.5rem" }}>
-            {duplicatePrompt.message}{" "}
+          <form className="add-type-form" onSubmit={handleCreateSquishyType}>
+            <div>
+              <label htmlFor="type-name">{t("wallBuilder.displayNameLabel")}</label>
+              <input
+                id="type-name"
+                type="text"
+                placeholder={t("wallBuilder.displayNamePlaceholder")}
+                value={newTypeName}
+                onChange={(e) => setNewTypeName(e.target.value)}
+              />
+            </div>
             <button
-              type="button"
-              className="secondary"
-              disabled={reactivatingId === duplicatePrompt.squishy_type_id}
-              onClick={() => handleReactivate(duplicatePrompt.squishy_type_id)}
+              type="submit"
+              disabled={!newTypeName.trim()}
             >
-              {reactivatingId === duplicatePrompt.squishy_type_id
-                ? t("wallBuilder.reactivating")
-                : t("wallBuilder.reactivateThisType")}
+              {t("wallBuilder.addType")}
             </button>
-          </p>
-        )}
+          </form>
 
-        <p className="muted">{t("wallBuilder.catalogCount", { count: squishyTypes.length })}</p>
+          {duplicatePrompt && (
+            <div className="inline-alert">
+              {duplicatePrompt.message}{" "}
+              <button
+                type="button"
+                className="secondary"
+                disabled={reactivatingId === duplicatePrompt.squishy_type_id}
+                onClick={() => handleReactivate(duplicatePrompt.squishy_type_id)}
+              >
+                {reactivatingId === duplicatePrompt.squishy_type_id
+                  ? t("wallBuilder.reactivating")
+                  : t("wallBuilder.reactivateThisType")}
+              </button>
+            </div>
+          )}
 
-        {squishyTypes.length > 0 && (
-          <table style={{ marginTop: "0.75rem" }}>
-            <thead>
-              <tr>
-                <th>{t("wallBuilder.tableName")}</th>
-                <th>{t("wallBuilder.tableQuantity")}</th>
-                <th></th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {squishyTypes.map((t2) => (
-                <tr key={t2.id}>
-                  <td>{t2.name}</td>
-                  <td>
-                    <input
-                      type="number"
-                      min={1}
-                      value={printQuantities[t2.id] ?? "1"}
-                      onChange={(e) =>
-                        setPrintQuantities((q) => ({ ...q, [t2.id]: e.target.value }))
-                      }
-                      style={{ width: "4rem" }}
-                    />
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={printingTypeId === t2.id}
-                      onClick={() => handlePrintBarcode(t2)}
-                    >
-                      {printingTypeId === t2.id ? t("wallBuilder.printing") : t("wallBuilder.printBarcode")}
-                    </button>
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={deactivatingId === t2.id}
-                      onClick={() => handleDeactivate(t2)}
-                    >
-                      {deactivatingId === t2.id ? t("wallBuilder.deactivating") : t("wallBuilder.deactivate")}
-                    </button>
-                  </td>
+          {squishyTypes.length > 0 && (
+            <table>
+              <thead>
+                <tr>
+                  <th>{t("wallBuilder.tableName")}</th>
+                  <th>{t("wallBuilder.tableQuantity")}</th>
+                  <th></th>
+                  <th></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-
-        <button
-          type="button"
-          className="secondary"
-          style={{ marginTop: "0.75rem" }}
-          onClick={() => setShowDeactivated((s) => !s)}
-        >
-          {showDeactivated ? t("wallBuilder.showActive") : t("wallBuilder.showDeactivated")}
-        </button>
-
-        {showDeactivated && (
-          <div style={{ marginTop: "0.75rem" }}>
-            {deactivatedTypes.length === 0 ? (
-              <p className="muted">{t("wallBuilder.noDeactivatedTypes")}</p>
-            ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>{t("wallBuilder.tableName")}</th>
-                    <th></th>
+              </thead>
+              <tbody>
+                {squishyTypes.map((t2) => (
+                  <tr key={t2.id}>
+                    <td>{t2.name}</td>
+                    <td>
+                      <input
+                        type="number"
+                        min={1}
+                        value={printQuantities[t2.id] ?? "1"}
+                        onChange={(e) =>
+                          setPrintQuantities((q) => ({ ...q, [t2.id]: e.target.value }))
+                        }
+                        style={{ width: "4.5rem" }}
+                      />
+                    </td>
+                    <td className="actions">
+                      <button
+                        type="button"
+                        className="quiet"
+                        disabled={printingTypeId === t2.id}
+                        onClick={() => handlePrintBarcode(t2)}
+                      >
+                        {printingTypeId === t2.id ? t("wallBuilder.printing") : t("wallBuilder.printBarcode")}
+                      </button>
+                    </td>
+                    <td className="actions">
+                      <button
+                        type="button"
+                        className="quiet danger"
+                        disabled={deactivatingId === t2.id}
+                        onClick={() => handleDeactivate(t2)}
+                      >
+                        {deactivatingId === t2.id ? t("wallBuilder.deactivating") : t("wallBuilder.deactivate")}
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {deactivatedTypes.map((t2) => (
-                    <tr key={t2.id}>
-                      <td>{t2.name}</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="secondary"
-                          disabled={reactivatingId === t2.id}
-                          onClick={() => handleReactivate(t2.id)}
-                        >
-                          {reactivatingId === t2.id ? t("wallBuilder.reactivating") : t("wallBuilder.reactivate")}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        )}
-      </section>
+                ))}
+              </tbody>
+            </table>
+          )}
 
-      <section className="panel">
-        <h2>{t("wallBuilder.uploadHeading")}</h2>
-        <form onSubmit={handleUpload}>
-          <div className="row">
+          <button
+            type="button"
+            className="secondary catalog-foot"
+            onClick={() => setShowDeactivated((s) => !s)}
+          >
+            {showDeactivated ? t("wallBuilder.showActive") : t("wallBuilder.showDeactivated")}
+          </button>
+
+          {showDeactivated && (
+            <div className="deactivated-block">
+              {deactivatedTypes.length === 0 ? (
+                <p className="muted">{t("wallBuilder.noDeactivatedTypes")}</p>
+              ) : (
+                <table className="table-dimmed">
+                  <thead>
+                    <tr>
+                      <th>{t("wallBuilder.tableName")}</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {deactivatedTypes.map((t2) => (
+                      <tr key={t2.id}>
+                        <td>{t2.name}</td>
+                        <td className="actions">
+                          <button
+                            type="button"
+                            className="quiet"
+                            disabled={reactivatingId === t2.id}
+                            onClick={() => handleReactivate(t2.id)}
+                          >
+                            {reactivatingId === t2.id ? t("wallBuilder.reactivating") : t("wallBuilder.reactivate")}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </section>
+
+        <section className="panel wb-upload">
+          <h2>{t("wallBuilder.uploadHeading")}</h2>
+          <form onSubmit={handleUpload}>
             <div>
               <label htmlFor="csv-file">{t("wallBuilder.csvLabel")}</label>
               <input
@@ -315,51 +314,51 @@ export default function WallBuilder({ onAuthError }: WallBuilderProps) {
                 onChange={(e) => setPdfFile(e.target.files?.[0] ?? null)}
               />
             </div>
-          </div>
-          <button type="submit" disabled={uploading || !csvFile || !pdfFile} style={{ marginTop: "1rem" }}>
-            {uploading ? t("wallBuilder.uploading") : t("wallBuilder.uploadButton")}
-          </button>
-        </form>
+            <button type="submit" disabled={uploading || !csvFile || !pdfFile}>
+              {uploading ? t("wallBuilder.uploading") : t("wallBuilder.uploadButton")}
+            </button>
+          </form>
 
-        {uploadSummary && (
-          <div style={{ marginTop: "1rem" }}>
-            <p className="muted">
-              {t("wallBuilder.createdWallSet", {
-                id: uploadSummary.wall_set_id,
-                label: uploadSummary.wall_set_label,
-              })}
-            </p>
-            <p>
-              <span className="pill ok">
-                {t("wallBuilder.shipmentsCreated", { count: uploadSummary.shipments_created })}
-              </span>{" "}
-              <span className="pill ok">
-                {t("wallBuilder.requirementsCreated", { count: uploadSummary.requirements_created })}
-              </span>{" "}
-              <span className="pill ok">
-                {t("wallBuilder.labelsMatched", { count: uploadSummary.labels_matched })}
-              </span>
-            </p>
-            {uploadSummary.unmatched_products.length > 0 ? (
-              <div>
-                <p className="pill error">
-                  {t("wallBuilder.unmatchedCount", { count: uploadSummary.unmatched_products.length })}
-                </p>
-                <ul>
-                  {uploadSummary.unmatched_products.map((name) => (
-                    <li key={name} className="error-text">
-                      {name}
-                    </li>
-                  ))}
-                </ul>
-                <p className="muted">{t("wallBuilder.addUnmatchedHint")}</p>
-              </div>
-            ) : (
-              <p className="pill ok">{t("wallBuilder.allMatched")}</p>
-            )}
-          </div>
-        )}
-      </section>
+          {uploadSummary && (
+            <div className="upload-result">
+              <p className="muted">
+                {t("wallBuilder.createdWallSet", {
+                  id: uploadSummary.wall_set_id,
+                  label: uploadSummary.wall_set_label,
+                })}
+              </p>
+              <p className="stat-strip">
+                <span>
+                  {t("wallBuilder.shipmentsCreated", { count: uploadSummary.shipments_created })}
+                </span>{" "}
+                <span>
+                  {t("wallBuilder.requirementsCreated", { count: uploadSummary.requirements_created })}
+                </span>{" "}
+                <span>
+                  {t("wallBuilder.labelsMatched", { count: uploadSummary.labels_matched })}
+                </span>
+              </p>
+              {uploadSummary.unmatched_products.length > 0 ? (
+                <div>
+                  <p className="status-line fault">
+                    {t("wallBuilder.unmatchedCount", { count: uploadSummary.unmatched_products.length })}
+                  </p>
+                  <ul className="fault-list">
+                    {uploadSummary.unmatched_products.map((name) => (
+                      <li key={name} className="error-text">
+                        {name}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="muted">{t("wallBuilder.addUnmatchedHint")}</p>
+                </div>
+              ) : (
+                <p className="status-line">{t("wallBuilder.allMatched")}</p>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

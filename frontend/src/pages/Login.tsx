@@ -29,9 +29,9 @@ export default function Login({ onLoggedIn }: LoginProps) {
   }
 
   return (
-    <div>
+    <div className="auth-screen">
       <h1>Admin login</h1>
-      <section className="panel" style={{ maxWidth: "20rem" }}>
+      <section>
         <form onSubmit={handleSubmit}>
           <label htmlFor="admin-password">Password</label>
           <input
@@ -40,9 +40,8 @@ export default function Login({ onLoggedIn }: LoginProps) {
             autoFocus
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            style={{ width: "100%" }}
           />
-          <button type="submit" disabled={!password || submitting} style={{ marginTop: "0.75rem" }}>
+          <button type="submit" disabled={!password || submitting}>
             {submitting ? "Logging in..." : "Log in"}
           </button>
         </form>

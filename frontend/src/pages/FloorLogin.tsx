@@ -39,13 +39,14 @@ export default function FloorLogin({ onUnlocked }: FloorLoginProps) {
   }
 
   return (
-    <div>
+    <div className="auth-screen">
       <h1>Enter floor PIN</h1>
-      <section className="panel" style={{ maxWidth: "20rem" }}>
+      <section>
         <form onSubmit={handleSubmit}>
           <label htmlFor="floor-pin">PIN</label>
           <input
             id="floor-pin"
+            className="pin-input"
             type="password"
             inputMode="numeric"
             pattern="[0-9]*"
@@ -53,9 +54,8 @@ export default function FloorLogin({ onUnlocked }: FloorLoginProps) {
             autoFocus
             value={pin}
             onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
-            style={{ width: "100%" }}
           />
-          <button type="submit" disabled={pin.length !== 4 || submitting} style={{ marginTop: "0.75rem" }}>
+          <button type="submit" disabled={pin.length !== 4 || submitting}>
             {submitting ? "Checking..." : "Unlock"}
           </button>
         </form>

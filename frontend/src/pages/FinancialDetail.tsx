@@ -138,15 +138,14 @@ export default function FinancialDetail({ onAuthError }: FinancialDetailProps) {
   return (
     <div>
       <h1>Financials -- {wallSet?.label}</h1>
-      <p className="muted">
+      <p className="muted back-link">
         <Link to="/financials">&larr; All financial records</Link>
       </p>
       {error && <p className="error-text">{error}</p>}
-      {saved && <p className="pill ok">Saved.</p>}
 
       <section className="panel">
         <form onSubmit={handleSubmit}>
-          <div className="row">
+          <div className="form-group">
             <div>
               <label htmlFor="streamer">Streamer</label>
               <input id="streamer" type="text" value={streamer} onChange={(e) => setStreamer(e.target.value)} />
@@ -171,7 +170,7 @@ export default function FinancialDetail({ onAuthError }: FinancialDetailProps) {
             </div>
           </div>
 
-          <div className="row" style={{ marginTop: "0.75rem" }}>
+          <div className="form-group">
             <div>
               <label htmlFor="revenue">Revenue ($)</label>
               <input id="revenue" type="number" step="0.01" value={revenue} onChange={(e) => setRevenue(e.target.value)} />
@@ -192,7 +191,7 @@ export default function FinancialDetail({ onAuthError }: FinancialDetailProps) {
             </div>
           </div>
 
-          <div className="row" style={{ marginTop: "0.75rem" }}>
+          <div className="form-group">
             <div>
               <label htmlFor="giveaway-type">Giveaway item</label>
               <select
@@ -222,60 +221,58 @@ export default function FinancialDetail({ onAuthError }: FinancialDetailProps) {
             </div>
           </div>
 
-          <div style={{ marginTop: "0.75rem" }}>
+          <div className="form-notes">
             <label htmlFor="notes">Notes</label>
             <textarea
               id="notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              style={{ width: "100%", minHeight: "4rem" }}
             />
           </div>
 
-          <h2>Item costs</h2>
-          <p className="muted">
-            Quantities come from this wall set's manifest. Leave a cost blank if it isn't known yet --
-            ROI shows as "—" until at least one item has a cost entered.
-          </p>
-          <table>
-            <thead>
-              <tr>
-                <th>Squishy type</th>
-                <th>Quantity</th>
-                <th>Unit cost ($)</th>
-                <th>Line cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(wallSet?.items ?? []).map((item) => {
-                const raw = itemCosts[item.squishy_type_id] ?? "";
-                const cost = raw ? parseFloat(raw) : NaN;
-                const lineCost = Number.isFinite(cost) ? cost * item.quantity : null;
-                return (
-                  <tr key={item.squishy_type_id}>
-                    <td>{item.name}</td>
-                    <td>{item.quantity}</td>
-                    <td>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min={0}
-                        style={{ width: "6rem" }}
-                        value={raw}
-                        onChange={(e) =>
-                          setItemCosts((c) => ({ ...c, [item.squishy_type_id]: e.target.value }))
-                        }
-                      />
-                    </td>
-                    <td>{lineCost === null ? "—" : formatMoney(lineCost)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="item-costs">
+            <h2>Item costs</h2>
+            <p className="muted">
+              Quantities come from this wall set's manifest. Leave a cost blank if it isn't known yet --
+              ROI shows as "—" until at least one item has a cost entered.
+            </p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Squishy type</th>
+                  <th className="num">Quantity</th>
+                  <th className="num">Unit cost ($)</th>
+                  <th className="num">Line cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(wallSet?.items ?? []).map((item) => {
+                  const raw = itemCosts[item.squishy_type_id] ?? "";
+                  const cost = raw ? parseFloat(raw) : NaN;
+                  const lineCost = Number.isFinite(cost) ? cost * item.quantity : null;
+                  return (
+                    <tr key={item.squishy_type_id}>
+                      <td>{item.name}</td>
+                      <td className="num">{item.quantity}</td>
+                      <td className="num">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          value={raw}
+                          onChange={(e) =>
+                            setItemCosts((c) => ({ ...c, [item.squishy_type_id]: e.target.value }))
+                          }
+                        />
+                      </td>
+                      <td className="num">{lineCost === null ? "—" : formatMoney(lineCost)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
 
-          <div className="panel" style={{ marginTop: "1rem", background: "var(--bg)" }}>
-            <div className="row">
+            <div className="totals-bar">
               <span>
                 <strong>Total item cost:</strong> {formatMoney(totalItemCost)}
               </span>
@@ -288,9 +285,12 @@ export default function FinancialDetail({ onAuthError }: FinancialDetailProps) {
             </div>
           </div>
 
-          <button type="submit" disabled={saving} style={{ marginTop: "1rem" }}>
-            {saving ? "Saving..." : "Save"}
-          </button>
+          <div className="form-actions">
+            <button type="submit" disabled={saving}>
+              {saving ? "Saving..." : "Save"}
+            </button>
+            {saved && <p className="pill ok">Saved.</p>}
+          </div>
         </form>
       </section>
     </div>

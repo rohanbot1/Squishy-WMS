@@ -1,16 +1,43 @@
+/* Squishy WMS -- visual system.
+ *
+ * Color rule: Cobalt means "you can act here / you are here" and nothing
+ * else. Green / amber / red only ever mean the state of a shipment or a
+ * scan, never decoration. Structure comes from 1px rules, not shadows.
+ */
+
 :root {
   color-scheme: light;
-  --bg: #f7f7f5;
-  --panel: #ffffff;
-  --border: #ddd8d0;
-  --text: #24211d;
-  --muted: #74706a;
-  --accent: #b5533c;
-  --accent-dark: #8f3f2c;
-  --ok: #2f7d4f;
-  --warn: #b58a1a;
-  --error: #b53c3c;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+
+  --concrete: #eceef1;
+  --surface: #ffffff;
+  --ink: #161a21;
+  --graphite: #5b6470;
+  --rule: #d3d8de;
+  --rule-soft: #e6e9ed;
+  --cobalt: #2446c8;
+  --cobalt-press: #1b369e;
+  --cobalt-tint: #e8ecfa;
+  --focus-ring: rgba(36, 70, 200, 0.28);
+
+  --ok: #0e7a4a;
+  --ok-tint: #e3f2ea;
+  --warn: #a35f00;
+  --warn-tint: #fdf1dc;
+  --fault: #c2261d;
+  --fault-tint: #fbe6e4;
+
+  --font-ui: "Barlow", "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Barlow Condensed", "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+
+  --radius: 3px;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -19,9 +46,11 @@
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--concrete);
+  color: var(--ink);
 }
+
+/* ------------------------------------------------------------------ shell */
 
 .app-shell {
   min-height: 100vh;
@@ -31,213 +60,990 @@ body {
 
 .top-nav {
   display: flex;
-  align-items: center;
-  gap: 1.5rem;
-  padding: 0.9rem 1.5rem;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  align-items: stretch;
+  gap: 2rem;
+  height: 52px;
+  padding: 0 1.5rem;
+  background: var(--ink);
+  color: #fff;
 }
 
 .top-nav .brand {
+  display: flex;
+  align-items: center;
+  font-family: var(--font-display);
   font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 1.35rem;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.nav-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0.25rem;
   margin-right: auto;
 }
 
 .top-nav a {
-  color: var(--muted);
+  display: flex;
+  align-items: center;
+  padding: 0 0.85rem;
+  color: #aeb5bf;
   text-decoration: none;
   font-weight: 500;
-  padding: 0.3rem 0.1rem;
-  border-bottom: 2px solid transparent;
+  font-size: 0.95rem;
+  border-bottom: 3px solid transparent;
+  border-top: 3px solid transparent;
+  white-space: nowrap;
 }
 
-.top-nav a.active,
 .top-nav a:hover {
-  color: var(--accent-dark);
-  border-bottom-color: var(--accent);
+  color: #fff;
+}
+
+.top-nav a.active {
+  color: #fff;
+  border-bottom-color: var(--cobalt);
+}
+
+.nav-end {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.nav-end > a {
+  align-self: stretch;
+}
+
+.nav-session {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: #aeb5bf;
+  font-size: 0.9rem;
+}
+
+.top-nav button.secondary {
+  height: 2rem;
+  background: transparent;
+  color: #fff;
+  border-color: #3a414c;
+}
+
+.top-nav button.secondary:hover:not(:disabled) {
+  background: #262c36;
+  border-color: #3a414c;
 }
 
 main {
   flex: 1;
-  padding: 1.5rem;
-  max-width: 900px;
   width: 100%;
+  max-width: 1240px;
   margin: 0 auto;
+  padding: 1.75rem 1.5rem 3rem;
 }
 
+/* ------------------------------------------------------------ typography */
+
 h1 {
-  font-size: 1.4rem;
-  margin-bottom: 1rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 2rem;
+  line-height: 1.1;
+  margin: 0 0 1.25rem;
 }
 
 h2 {
-  font-size: 1.1rem;
-  margin: 1.5rem 0 0.75rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 0.9rem;
 }
 
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.muted {
+  color: var(--graphite);
+  font-size: 0.9rem;
+}
+
+.error-text {
+  color: var(--fault);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+a {
+  color: var(--cobalt);
+}
+
+a:hover {
+  color: var(--cobalt-press);
+}
+
+/* --------------------------------------------------------------- regions */
+
 .panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
   margin-bottom: 1.25rem;
 }
 
 .row {
   display: flex;
-  gap: 0.6rem;
-  align-items: center;
+  gap: 0.75rem;
+  align-items: flex-end;
   flex-wrap: wrap;
 }
 
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem 1.25rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.toolbar .field-grow {
+  flex: 1 1 16rem;
+}
+
+.toolbar .field-grow input {
+  width: 100%;
+}
+
+.region-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+}
+
+.region-head h2 {
+  margin: 0;
+}
+
+.region-head .muted {
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------- inputs */
+
 label {
-  font-size: 0.85rem;
-  color: var(--muted);
   display: block;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--graphite);
 }
 
 input[type="text"],
 input[type="number"],
-select {
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+input[type="password"],
+input[type="datetime-local"],
+select,
+textarea {
+  height: 2.4rem;
+  padding: 0 0.65rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
   font-size: 0.95rem;
-  background: white;
-  color: var(--text);
+}
+
+textarea {
+  height: auto;
+  padding: 0.5rem 0.65rem;
+  resize: vertical;
+}
+
+select {
+  padding-right: 2rem;
+  min-width: 14rem;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--cobalt);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+input:disabled {
+  background: var(--concrete);
+  color: var(--graphite);
 }
 
 input[type="file"] {
+  font: inherit;
   font-size: 0.9rem;
+  color: var(--graphite);
 }
 
-button {
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: white;
-  font-weight: 600;
+input[type="file"]::file-selector-button {
+  margin-right: 0.75rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
   cursor: pointer;
-  font-size: 0.9rem;
+}
+
+input[type="file"]::file-selector-button:hover {
+  border-color: var(--graphite);
+}
+
+/* --------------------------------------------------------------- buttons */
+
+button {
+  height: 2.4rem;
+  padding: 0 1.1rem;
+  border: 1px solid var(--cobalt);
+  border-radius: var(--radius);
+  background: var(--cobalt);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 80ms linear, border-color 80ms linear, color 80ms linear;
 }
 
 button:hover:not(:disabled) {
-  background: var(--accent-dark);
-  border-color: var(--accent-dark);
+  background: var(--cobalt-press);
+  border-color: var(--cobalt-press);
+}
+
+button:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 button:disabled {
-  opacity: 0.5;
+  background: var(--rule-soft);
+  border-color: var(--rule);
+  color: #8a929d;
   cursor: not-allowed;
 }
 
 button.secondary {
-  background: transparent;
-  color: var(--accent-dark);
+  background: var(--surface);
+  border-color: var(--rule);
+  color: var(--ink);
+  font-weight: 500;
 }
 
 button.secondary:hover:not(:disabled) {
-  background: #f1e6e1;
+  background: var(--concrete);
+  border-color: var(--graphite);
 }
+
+/* Quiet, text-weight actions for dense table rows. */
+button.quiet,
+button.quiet:disabled {
+  height: 2rem;
+  padding: 0 0.6rem;
+  background: transparent;
+  border-color: transparent;
+  color: var(--cobalt);
+  font-weight: 500;
+}
+
+button.quiet:hover:not(:disabled) {
+  background: var(--cobalt-tint);
+  border-color: transparent;
+}
+
+button.quiet:disabled {
+  color: var(--graphite);
+}
+
+button.quiet.danger {
+  color: var(--graphite);
+}
+
+button.quiet.danger:hover:not(:disabled) {
+  background: var(--fault-tint);
+  color: var(--fault);
+}
+
+/* ---------------------------------------------------------------- tables */
 
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
 }
 
-th,
+th {
+  text-align: left;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--graphite);
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
 td {
   text-align: left;
-  padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid var(--border);
+  padding: 0 0.75rem;
+  height: 2.75rem;
+  border-bottom: 1px solid var(--rule-soft);
 }
+
+tbody tr:hover > td {
+  background: #f6f7f9;
+}
+
+th.num,
+td.num {
+  text-align: right;
+}
+
+td.actions {
+  text-align: right;
+  white-space: nowrap;
+  width: 1%;
+}
+
+td.actions .row {
+  justify-content: flex-end;
+  gap: 0.25rem;
+  flex-wrap: nowrap;
+}
+
+td input[type="number"] {
+  height: 2rem;
+}
+
+.table-dimmed td {
+  color: var(--graphite);
+}
+
+/* Shipment rows carry their status on the leading edge. */
+tr.status-row > td:first-child {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+
+tr.status-row.is-complete > td:first-child {
+  box-shadow: inset 3px 0 0 var(--ok);
+}
+
+tr.status-row.is-complete > td {
+  color: var(--graphite);
+}
+
+tr.detail-row > td {
+  height: auto;
+  padding: 0.25rem 0.75rem 0.75rem 2rem;
+  background: #f8f9fa;
+}
+
+tr.detail-row:hover > td {
+  background: #f8f9fa;
+}
+
+tr.detail-row table {
+  font-size: 0.9rem;
+  border-left: 1px solid var(--rule);
+}
+
+tr.detail-row table td {
+  height: 2.25rem;
+  background: transparent;
+}
+
+.sticky-head th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+
+/* ------------------------------------------------------ status indicators */
 
 .pill {
   display: inline-block;
-  padding: 0.15rem 0.55rem;
-  border-radius: 999px;
-  font-size: 0.75rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
   font-weight: 600;
 }
 
 .pill.ok {
-  background: #e4f2e8;
+  background: var(--ok-tint);
   color: var(--ok);
 }
 
 .pill.warn {
-  background: #fbf1dc;
+  background: var(--warn-tint);
   color: var(--warn);
 }
 
 .pill.error {
-  background: #fbe4e2;
-  color: var(--error);
+  background: var(--fault-tint);
+  color: var(--fault);
 }
 
-.muted {
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.error-text {
-  color: var(--error);
+.status-text {
+  font-weight: 600;
   font-size: 0.9rem;
 }
 
-.scan-input {
-  font-size: 1.4rem;
-  padding: 0.9rem 1rem;
-  width: 100%;
-  text-align: center;
-}
-
-.scan-result {
-  margin-top: 1.25rem;
-  padding: 1.5rem;
-  border-radius: 10px;
-  text-align: center;
-  font-size: 1.2rem;
-  font-weight: 600;
-}
-
-.scan-result.status-complete {
-  background: #e4f2e8;
+.status-text.ok {
   color: var(--ok);
 }
 
-.scan-result.status-in_progress {
-  background: #fbf1dc;
+.status-text.warn {
   color: var(--warn);
 }
 
-.scan-result.status-no_shipment_needs_it,
-.scan-result.status-unknown_barcode {
-  background: #fbe4e2;
-  color: var(--error);
+.inline-alert {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.85rem;
+  border-left: 3px solid var(--fault);
+  background: var(--fault-tint);
+  color: var(--fault);
+  font-weight: 500;
+}
+
+.status-line {
+  margin: 0.75rem 0 0;
+  padding-left: 0.85rem;
+  border-left: 3px solid var(--ok);
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.status-line.fault {
+  border-left-color: var(--fault);
+  color: var(--fault);
+}
+
+.fault-list {
+  margin: 0.5rem 0 0.75rem;
+  padding: 0;
+  list-style: none;
+  border-left: 3px solid var(--fault);
+}
+
+.fault-list li {
+  padding: 0.3rem 0.85rem;
+  font-weight: 500;
+}
+
+/* ----------------------------------------------------------- auth screens */
+
+.auth-screen {
+  max-width: 22rem;
+  margin: 4rem auto 0;
+}
+
+.auth-screen form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.auth-screen label {
+  margin-bottom: -0.6rem;
+}
+
+.auth-screen input {
+  width: 100%;
+  height: 3rem;
+  font-size: 1.05rem;
+}
+
+.auth-screen button {
+  height: 3rem;
+  width: 100%;
+  font-size: 1rem;
+}
+
+.auth-screen .error-text {
+  margin: 1rem 0 0;
+}
+
+.auth-screen input.pin-input {
+  height: 4.25rem;
+  padding-left: 0.9em;
+  font-family: var(--font-mono);
+  font-size: 2rem;
+  letter-spacing: 0.9em;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------- Wall Builder */
+
+.wb-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.wb-grid > .panel {
+  margin-bottom: 0;
+}
+
+.wb-upload {
+  position: sticky;
+  top: 1.25rem;
+}
+
+.wb-upload form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.wb-upload form button {
+  align-self: flex-start;
+}
+
+.add-type-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.add-type-form input {
+  width: 18rem;
+}
+
+.catalog-foot {
+  margin-top: 0.75rem;
+}
+
+.deactivated-block {
+  margin-top: 0.75rem;
+  padding: 0.25rem 0.75rem 0.5rem;
+  background: var(--concrete);
+  border-radius: var(--radius);
+}
+
+.deactivated-block tbody tr:hover > td {
+  background: transparent;
+}
+
+.deactivated-block td {
+  border-bottom-color: var(--rule);
+}
+
+.deactivated-block .muted {
+  margin: 0.5rem 0;
+}
+
+.stat-strip {
+  display: grid;
+  grid-template-columns: 1fr;
+  margin: 0.75rem 0 0;
+  border-top: 1px solid var(--rule);
+}
+
+.stat-strip > span {
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--rule-soft);
+  font-weight: 600;
+}
+
+.upload-result {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+}
+
+.upload-result p {
+  margin: 0;
+}
+
+@media (max-width: 960px) {
+  .wb-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wb-upload {
+    position: static;
+  }
+}
+
+/* ----------------------------------------------------------- Packer Scan */
+
+.scan-station {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+}
+
+input.scan-input {
+  display: block;
+  width: 100%;
+  height: 4.5rem;
+  padding: 0 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 1.9rem;
+  letter-spacing: 0.04em;
+  text-align: center;
+  border: 2px solid var(--rule);
+}
+
+/* "Armed": focused and ready for the next trigger pull. The input is
+ * briefly disabled while each scan is in flight -- that must look
+ * identical to armed, or the field would flicker grey on every scan. */
+input.scan-input:focus,
+input.scan-input:disabled {
+  border-color: var(--cobalt);
+  box-shadow: 0 0 0 4px var(--focus-ring);
+  background: var(--surface);
+  color: var(--ink);
+  opacity: 1;
+}
+
+.scan-result {
+  position: relative;
+  overflow: hidden;
+  margin-top: 1.25rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  animation: result-in 180ms var(--ease-out) both;
+}
+
+/* Leading status band. */
+.scan-result::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 12px;
+  background: var(--rule);
+  transform-origin: top;
+  animation: band-in 220ms var(--ease-out) both;
+}
+
+/* Full-panel fill, used by the loud states. */
+.scan-result::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform-origin: left;
+  transform: scaleX(0);
+}
+
+.scan-result-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 17rem;
+  padding: 1.75rem 2rem 1.75rem 3rem;
 }
 
 .bin-number {
-  font-size: 2.5rem;
-  font-weight: 800;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(5rem, 11vw, 9.5rem);
+  /* Loose enough for the CJK fallback, whose glyphs sit taller than
+     Barlow Condensed's figures. */
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+  margin-bottom: 1rem;
 }
+
+.scan-result-message {
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.35;
+  max-width: 60rem;
+}
+
+/* No bin to show (faults, single-item completions): the message is the
+   whole result, so it carries the size. */
+.scan-result-message:only-child {
+  font-size: 2.25rem;
+  line-height: 1.25;
+}
+
+/* In progress: the routine result. Calm surface, amber band. */
+.scan-result.status-in_progress::before {
+  background: var(--warn);
+}
+
+/* Complete: the one loud moment. Green sweeps across from the band. */
+.scan-result.status-complete {
+  border-color: var(--ok);
+  color: #fff;
+}
+
+.scan-result.status-complete::before {
+  background: var(--ok);
+}
+
+.scan-result.status-complete::after {
+  background: var(--ok);
+  animation: fill-sweep 260ms var(--ease-out) 60ms both;
+}
+
+.scan-result.status-complete .scan-result-body {
+  animation: body-in 160ms linear 140ms both;
+}
+
+/* Faults: break the packer's rhythm. Solid red, one sharp pulse. */
+.scan-result.status-no_shipment_needs_it,
+.scan-result.status-unknown_barcode {
+  border-color: var(--fault);
+  background: var(--fault);
+  color: #fff;
+}
+
+.scan-result.status-no_shipment_needs_it::before,
+.scan-result.status-unknown_barcode::before {
+  background: #8f1a14;
+}
+
+.scan-result.status-no_shipment_needs_it::after,
+.scan-result.status-unknown_barcode::after {
+  background: #fff;
+  transform: none;
+  opacity: 0;
+  animation: fault-pulse 160ms linear both;
+}
+
+@keyframes result-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes band-in {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes fill-sweep {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes body-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fault-pulse {
+  0% {
+    opacity: 0.35;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-result,
+  .scan-result::before,
+  .scan-result-body {
+    animation: none !important;
+  }
+  .scan-result.status-complete::after {
+    animation: none;
+    transform: none;
+  }
+  .scan-result.status-no_shipment_needs_it::after,
+  .scan-result.status-unknown_barcode::after {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------------------ Financials */
+
+.back-link {
+  margin: -0.75rem 0 1.25rem;
+}
+
+.back-link a {
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.form-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem 1.25rem;
+  padding: 1.1rem 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.form-group:first-child {
+  padding-top: 0;
+}
+
+.form-group input,
+.form-group select {
+  width: 100%;
+  min-width: 0;
+}
+
+.form-notes {
+  padding: 1.1rem 0 1.5rem;
+}
+
+.form-notes textarea {
+  width: 100%;
+  min-height: 4.5rem;
+}
+
+.item-costs .muted {
+  margin: -0.4rem 0 0.75rem;
+  max-width: 48rem;
+}
+
+.item-costs td input[type="number"] {
+  width: 7rem;
+  text-align: right;
+}
+
+.totals-bar {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem 2.5rem;
+  padding: 0.9rem 0.75rem;
+  border-top: 2px solid var(--ink);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.totals-bar strong {
+  font-weight: 500;
+  color: var(--graphite);
+  margin-right: 0.4rem;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plain-list li {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  height: 2.75rem;
+  padding: 0 0.75rem;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.plain-list li:last-child {
+  border-bottom: none;
+}
+
+/* In-table and in-list links read as quiet actions, like button.quiet. */
+td.actions a,
+.plain-list a {
+  font-weight: 500;
+  text-decoration: none;
+}
+
+td.actions a:hover,
+.plain-list a:hover {
+  text-decoration: underline;
+}
+
+.panel > table:only-child tbody tr:last-child td,
+.panel > table:last-child tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* --------------------------------------------------------- lang switcher */
 
 .lang-switcher {
   display: flex;
-  gap: 0.35rem;
+  border: 1px solid #3a414c;
+  border-radius: var(--radius);
+  overflow: hidden;
 }
 
 .lang-switcher button {
-  padding: 0.3rem 0.6rem;
-  font-size: 0.8rem;
+  height: 1.9rem;
+  padding: 0 0.7rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: #aeb5bf;
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
-.lang-switcher button.lang-active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: white;
+.lang-switcher button + button {
+  border-left: 1px solid #3a414c;
+}
+
+.lang-switcher button.secondary {
+  background: transparent;
+  color: #aeb5bf;
+}
+
+.lang-switcher button:hover:not(:disabled),
+.lang-switcher button.secondary:hover:not(:disabled) {
+  background: #262c36;
+  color: #fff;
+}
+
+.lang-switcher button.lang-active,
+.lang-switcher button.lang-active:hover:not(:disabled) {
+  background: var(--cobalt);
+  color: #fff;
 }
