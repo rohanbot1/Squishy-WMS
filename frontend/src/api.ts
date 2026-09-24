@@ -39,11 +39,20 @@ export interface WallSet {
   items: WallSetItem[];
 }
 
+export interface TypeBreakdownEntry {
+  squishy_type_id: number;
+  name: string;
+  total_quantity: number;
+}
+
 export interface UploadSummary {
   shipments_created: number;
   requirements_created: number;
   unmatched_products: string[];
   labels_matched: number;
+  // Every squishy type this upload's shipments need, total quantity across
+  // all of them, most-needed first. Informational only.
+  type_breakdown: TypeBreakdownEntry[];
 }
 
 export interface UploadToNewWallSetSummary extends UploadSummary {
@@ -227,6 +236,14 @@ export function listWallSets(): Promise<WallSet[]> {
 
 export function getWallSet(id: number): Promise<WallSet> {
   return request(`/wall-sets/${id}`);
+}
+
+export function renameWallSet(id: number, label: string): Promise<WallSet> {
+  return request(`/wall-sets/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
 }
 
 export async function downloadSquishyTypeLabelSheet(

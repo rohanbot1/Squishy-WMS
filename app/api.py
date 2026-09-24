@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Request, U
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from .database import get_session, init_db
@@ -86,6 +87,10 @@ class WallSetItemCreate(BaseModel):
 class WallSetCreate(BaseModel):
     label: str
     items: list[WallSetItemCreate] = []
+
+
+class WallSetRename(BaseModel):
+    label: str
 
 
 class ScanRequest(BaseModel):
@@ -186,6 +191,34 @@ def _get_wall_set_or_404(session: Session, wall_set_id: int) -> WallSet:
     if wall_set is None:
         raise HTTPException(status_code=404, detail="Wall set not found")
     return wall_set
+
+
+def _wall_set_type_breakdown(session: Session, wall_set_id: int) -> list[dict]:
+    """Every squishy type this wall set's shipments need, with the total
+    quantity summed across all of them, most-needed first. Informational
+    only (shown after an upload) -- aggregates ShipmentRequirement, so it
+    reflects what the orders actually called for, independent of any
+    manually-built WallSetItem manifest."""
+    rows = session.exec(
+        select(
+            SquishyType.id,
+            SquishyType.name,
+            func.sum(ShipmentRequirement.quantity_required),
+        )
+        .join(Shipment, ShipmentRequirement.shipment_id == Shipment.id)
+        .join(SquishyType, ShipmentRequirement.squishy_type_id == SquishyType.id)
+        .where(Shipment.wall_set_id == wall_set_id)
+        .group_by(SquishyType.id, SquishyType.name)
+    ).all()
+    breakdown = [
+        # int(): func.sum comes back as Decimal on Postgres, int on SQLite.
+        {"squishy_type_id": type_id, "name": name, "total_quantity": int(total)}
+        for type_id, name, total in rows
+    ]
+    # Quantity desc; name asc as a stable tiebreak so equal totals don't
+    # reorder run to run.
+    breakdown.sort(key=lambda r: (-r["total_quantity"], r["name"]))
+    return breakdown
 
 
 # --- squishy types -------------------------------------------------------
@@ -322,6 +355,25 @@ def get_wall_set(wall_set_id: int, session: Session = Depends(get_session)):
     return {**wall_set.model_dump(), "items": _wall_set_items_payload(session, wall_set_id)}
 
 
+@floor_router.patch("/wall-sets/{wall_set_id}")
+def rename_wall_set(
+    wall_set_id: int, body: WallSetRename, session: Session = Depends(get_session),
+):
+    """Rename a wall set. label is display-only -- it isn't referenced by
+    matching, scanning, or label lookup -- so this is unrestricted and
+    allowed at any time. Returns the same shape as GET so the caller can
+    swap the whole record in."""
+    wall_set = _get_wall_set_or_404(session, wall_set_id)
+    label = body.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="Wall set name cannot be empty")
+    wall_set.label = label
+    session.add(wall_set)
+    session.commit()
+    session.refresh(wall_set)
+    return {**wall_set.model_dump(), "items": _wall_set_items_payload(session, wall_set_id)}
+
+
 @floor_router.get("/wall-sets/{wall_set_id}/shipments")
 def list_shipments(wall_set_id: int, session: Session = Depends(get_session)):
     _get_wall_set_or_404(session, wall_set_id)
@@ -393,6 +445,7 @@ async def _ingest_wall_set_upload(
         "requirements_created": ingest_summary["requirements_created"],
         "unmatched_products": ingest_summary["unmatched_products"],
         "labels_matched": labels_matched,
+        "type_breakdown": _wall_set_type_breakdown(session, wall_set.id),
     }
 
 

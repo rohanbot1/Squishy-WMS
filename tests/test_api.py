@@ -805,6 +805,75 @@ def test_upload_to_new_wall_set_auto_creates_wall_set_with_no_manifest(client):
     assert len(shipments) == body["shipments_created"]
 
 
+# --- wall set rename ---------------------------------------------------------
+
+def test_rename_wall_set_updates_label_and_persists(client):
+    wall_set = client.post("/api/wall-sets", json={"label": "Original name"}).json()
+
+    resp = client.patch(f"/api/wall-sets/{wall_set['id']}", json={"label": "Friday drop"})
+    assert resp.status_code == 200
+    assert resp.json()["label"] == "Friday drop"
+
+    # Persists: a fresh GET and the list both reflect the new name.
+    assert client.get(f"/api/wall-sets/{wall_set['id']}").json()["label"] == "Friday drop"
+    listed = client.get("/api/wall-sets").json()
+    assert next(w for w in listed if w["id"] == wall_set["id"])["label"] == "Friday drop"
+
+
+def test_rename_wall_set_trims_and_rejects_blank(client):
+    wall_set = client.post("/api/wall-sets", json={"label": "keep me"}).json()
+
+    assert client.patch(f"/api/wall-sets/{wall_set['id']}", json={"label": "  spaced  "}).json()["label"] == "spaced"
+
+    resp = client.patch(f"/api/wall-sets/{wall_set['id']}", json={"label": "   "})
+    assert resp.status_code == 400
+    # A rejected blank must not overwrite the last good value.
+    assert client.get(f"/api/wall-sets/{wall_set['id']}").json()["label"] == "spaced"
+
+
+def test_rename_unknown_wall_set_404s(client):
+    assert client.patch("/api/wall-sets/999999", json={"label": "x"}).status_code == 404
+
+
+def test_rename_wall_set_requires_floor_auth(unauthenticated_client):
+    assert unauthenticated_client.patch("/api/wall-sets/1", json={"label": "x"}).status_code == 401
+
+
+# --- upload type breakdown ---------------------------------------------------
+
+def _tiny_pdf_bytes():
+    """A one-page blank PDF -- enough for the upload route (label matching
+    just finds nothing), so the breakdown can be tested without the real
+    sample export."""
+    doc = fitz.open()
+    doc.new_page()
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def test_upload_summary_includes_type_breakdown_aggregated_and_sorted(client):
+    for name in ("Alpha", "Beta"):
+        assert client.post("/api/squishy-types", json={"name": name}).status_code == 200
+
+    # Alpha: 2 (T1) + 3 (T2) = 5 across two shipments; Beta: 1 (T1).
+    csv_bytes = (
+        "Order ID,Product Name,Quantity,Tracking ID\r\n"
+        "o1,Alpha,2,T1\r\n"
+        "o1,Beta,1,T1\r\n"
+        "o2,Alpha,3,T2\r\n"
+    ).encode("utf-8")
+    resp = client.post("/api/wall-sets/upload", files={
+        "csv_file": ("orders.csv", csv_bytes, "text/csv"),
+        "pdf_file": ("labels.pdf", _tiny_pdf_bytes(), "application/pdf"),
+    })
+    assert resp.status_code == 200
+    breakdown = resp.json()["type_breakdown"]
+    # Aggregated across shipments, sorted by quantity descending.
+    assert [(b["name"], b["total_quantity"]) for b in breakdown] == [("Alpha", 5), ("Beta", 1)]
+    assert all(isinstance(b["squishy_type_id"], int) for b in breakdown)
+
+
 # --- scanning ------------------------------------------------------------
 
 @pytest.mark.skipif(not HAS_SAMPLE_DATA, reason="requires a real export in sample_data/")

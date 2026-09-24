@@ -642,6 +642,103 @@ tr.detail-row table td {
   margin-top: 0.75rem;
 }
 
+.catalog-search {
+  margin-bottom: 0.75rem;
+}
+
+.catalog-search input {
+  width: 100%;
+}
+
+/* Drag-and-drop upload fields. Cobalt = the accent for "you can act here",
+   so a file dragged over a zone borrows it; structure is a dashed rule, no
+   shadow. The native picker stays inside for click-to-choose. */
+.dropzone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.85rem;
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition: border-color 80ms linear, background-color 80ms linear;
+}
+
+.dropzone.has-file {
+  border-style: solid;
+  border-color: var(--rule);
+}
+
+.dropzone.drag-over {
+  border-color: var(--cobalt);
+  border-style: solid;
+  background: var(--cobalt-tint);
+}
+
+.dropzone-hint {
+  color: var(--graphite);
+  font-size: 0.85rem;
+}
+
+.dropzone-file {
+  flex-basis: 100%;
+  color: var(--ok);
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+
+.dropzone-reject {
+  margin-top: 0.4rem;
+}
+
+/* Inline wall-set rename in the upload summary. */
+.wall-set-name {
+  margin: 0.85rem 0;
+}
+
+.wall-set-name .row {
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wall-set-name-value {
+  font-size: 1.05rem;
+}
+
+.wall-set-name input {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+/* Post-ingest "types needed" breakdown. */
+.type-breakdown {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--rule-soft);
+}
+
+.type-breakdown h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.type-breakdown .table-scroll,
+.type-breakdown table {
+  display: block;
+  max-height: 15rem;
+  overflow-y: auto;
+}
+
+.type-breakdown thead,
+.type-breakdown tbody,
+.type-breakdown tr {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
 .deactivated-block {
   margin-top: 0.75rem;
   padding: 0.25rem 0.75rem 0.5rem;
