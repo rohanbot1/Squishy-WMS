@@ -17,7 +17,7 @@ same cookie-checked, expiry-checked gate /auth/me and /auth/floor-me use.
 import hashlib
 import os
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, Response
@@ -25,6 +25,7 @@ from sqlmodel import Session, select
 
 from .database import get_session
 from .models import AdminSession, FloorSession, PinAttempt
+from .timeutil import as_utc, utc_now
 
 COOKIE_NAME = "session"
 SESSION_LIFETIME = timedelta(days=30)
@@ -65,7 +66,7 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def create_session(session: Session) -> AdminSession:
-    now = datetime.utcnow()
+    now = utc_now()
     admin_session = AdminSession(
         token=secrets.token_urlsafe(32),
         created_at=now,
@@ -106,7 +107,7 @@ def require_admin(
         raise HTTPException(status_code=401, detail="Not logged in")
 
     admin_session = session.get(AdminSession, token)
-    if admin_session is None or admin_session.expires_at < datetime.utcnow():
+    if admin_session is None or as_utc(admin_session.expires_at) < utc_now():
         raise HTTPException(status_code=401, detail="Session expired or invalid")
 
     return admin_session
@@ -134,7 +135,7 @@ def client_ip(request: Request) -> str:
 
 
 def create_floor_session(session: Session) -> FloorSession:
-    now = datetime.utcnow()
+    now = utc_now()
     floor_session = FloorSession(
         token=secrets.token_urlsafe(32),
         created_at=now,
@@ -164,7 +165,7 @@ def require_floor_access(
         raise HTTPException(status_code=401, detail="Floor PIN not entered")
 
     floor_session = session.get(FloorSession, token)
-    if floor_session is None or floor_session.expires_at < datetime.utcnow():
+    if floor_session is None or as_utc(floor_session.expires_at) < utc_now():
         raise HTTPException(status_code=401, detail="Floor session expired or invalid")
 
     return floor_session
@@ -186,12 +187,12 @@ def verify_floor_pin(session: Session, ip_address: str, pin: str) -> bool:
     after the last one -- returns False identically, so the caller's
     generic "Incorrect PIN" response never reveals which one happened,
     and a throttled guess never even reaches the real password check."""
-    now = datetime.utcnow()
+    now = utc_now()
     attempt = session.get(PinAttempt, ip_address)
 
     if attempt is not None:
         delay = timedelta(seconds=min(2 ** attempt.failure_count, PIN_BACKOFF_CAP_SECONDS))
-        if now - attempt.last_attempt_at < delay:
+        if now - as_utc(attempt.last_attempt_at) < delay:
             return False
 
     if verify_password(pin, get_floor_pin_hash()):

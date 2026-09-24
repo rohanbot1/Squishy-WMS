@@ -9,7 +9,10 @@ would miss that combination entirely.
 """
 from datetime import datetime
 from typing import Optional
+from sqlalchemy import DateTime
 from sqlmodel import SQLModel, Field, Relationship
+
+from .timeutil import utc_now
 
 
 class SquishyType(SQLModel, table=True):
@@ -30,7 +33,7 @@ class SquishyType(SQLModel, table=True):
     # (still unique) so a type can't be "recreated" as a distinct row --
     # see the reactivate-on-duplicate-name handling in app/api.py.
     active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
     @staticmethod
     def normalize(name: str) -> str:
@@ -44,7 +47,7 @@ class WallSet(SQLModel, table=True):
     """One physical wall / one livestream's worth of pre-built inventory."""
     id: Optional[int] = Field(default=None, primary_key=True)
     label: str  # e.g. "9/1 stream" or whatever Binit's team calls it
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     orders_uploaded: bool = Field(default=False)
     pdf_file_path: Optional[str] = None  # storage key for the master label/packing-slip PDF (app/storage.py), set on upload
 
@@ -72,7 +75,7 @@ class Shipment(SQLModel, table=True):
     bin_number: Optional[int] = None  # assigned on first partial scan
     is_complete: bool = Field(default=False)
     completed_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ShipmentRequirement(SQLModel, table=True):
@@ -93,7 +96,7 @@ class ScanEvent(SQLModel, table=True):
     squishy_type_id: int = Field(foreign_key="squishytype.id")
     shipment_id: Optional[int] = Field(default=None, foreign_key="shipment.id")
     matched: bool  # False if scanned but no open shipment needed it
-    scanned_at: datetime = Field(default_factory=datetime.utcnow)
+    scanned_at: datetime = Field(default_factory=utc_now)
 
 
 class AdminSession(SQLModel, table=True):
@@ -101,7 +104,7 @@ class AdminSession(SQLModel, table=True):
     table just needs to survive server restarts and let a cookie prove
     "this request is Binit" to the require_admin dependency (app/auth.py)."""
     token: str = Field(primary_key=True)  # secrets.token_urlsafe(32)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     expires_at: datetime
 
 
@@ -113,7 +116,7 @@ class FloorSession(SQLModel, table=True):
     way admin login doesn't, so keeping them as two small independent
     things stays clearer than one generalized one."""
     token: str = Field(primary_key=True)  # secrets.token_urlsafe(32)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     expires_at: datetime
 
 
@@ -125,7 +128,7 @@ class PinAttempt(SQLModel, table=True):
     legitimate floor worker."""
     ip_address: str = Field(primary_key=True)
     failure_count: int = Field(default=0)
-    last_attempt_at: datetime = Field(default_factory=datetime.utcnow)
+    last_attempt_at: datetime = Field(default_factory=utc_now)
 
 
 class FinancialRecord(SQLModel, table=True):
@@ -138,16 +141,20 @@ class FinancialRecord(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     wall_set_id: int = Field(foreign_key="wallset.id", unique=True)
     streamer: str
-    stream_started_at: datetime
-    stream_ended_at: datetime
+    # Wall-clock times as typed into a datetime-local input -- no zone, and
+    # deliberately stored naive exactly as entered (plain TIMESTAMP), not
+    # converted to UTC like every other timestamp here. Explicit sa_type so
+    # SQLModel's UTC column type (which rejects naive values) isn't applied.
+    stream_started_at: datetime = Field(sa_type=DateTime(timezone=False))
+    stream_ended_at: datetime = Field(sa_type=DateTime(timezone=False))
     revenue: float
     fees: float
     bid_average: float
     giveaway_squishy_type_id: Optional[int] = Field(default=None, foreign_key="squishytype.id")
     giveaway_quantity: Optional[int] = None
     notes: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class FinancialRecordItemCost(SQLModel, table=True):

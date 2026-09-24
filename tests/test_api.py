@@ -190,13 +190,13 @@ def test_logout_invalidates_session(client, admin_password):
 
 
 def test_expired_session_rejected(client, admin_password, engine):
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     from app.models import AdminSession
 
     with Session(engine) as session:
         session.add(AdminSession(
             token="expiredtoken123",
-            expires_at=datetime.utcnow() - timedelta(days=1),
+            expires_at=datetime.now(timezone.utc) - timedelta(days=1),
         ))
         session.commit()
 
@@ -327,7 +327,7 @@ def test_floor_pin_backoff_does_not_count_attempts_made_within_the_delay(floor_p
 def test_floor_pin_backoff_allows_correct_pin_once_delay_has_passed(floor_pin_hash_set, engine):
     """Not a hard lockout -- once enough time has passed, a correct PIN
     still works, no matter how many prior failures."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     from app.models import PinAttempt
 
     floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": "0000"})
@@ -336,7 +336,7 @@ def test_floor_pin_backoff_allows_correct_pin_once_delay_has_passed(floor_pin_ha
         attempt = session.get(PinAttempt, "testclient")
         assert attempt is not None
         assert attempt.failure_count == 1
-        attempt.last_attempt_at = datetime.utcnow() - timedelta(minutes=5)
+        attempt.last_attempt_at = datetime.now(timezone.utc) - timedelta(minutes=5)
         session.add(attempt)
         session.commit()
 
@@ -346,14 +346,14 @@ def test_floor_pin_backoff_allows_correct_pin_once_delay_has_passed(floor_pin_ha
 
 
 def test_floor_pin_failure_count_resets_after_success(floor_pin_hash_set, engine):
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     from app.models import PinAttempt
 
     floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": "0000"})
 
     with Session(engine) as session:
         attempt = session.get(PinAttempt, "testclient")
-        attempt.last_attempt_at = datetime.utcnow() - timedelta(minutes=5)
+        attempt.last_attempt_at = datetime.now(timezone.utc) - timedelta(minutes=5)
         session.add(attempt)
         session.commit()
 
@@ -362,6 +362,109 @@ def test_floor_pin_failure_count_resets_after_success(floor_pin_hash_set, engine
 
     with Session(engine) as session:
         assert session.get(PinAttempt, "testclient") is None
+
+
+# --- timezone-aware timestamps (Postgres login crash regression) ------------
+# SQLModel 0.0.47 rejects naive datetimes on write ("Datetime values must
+# have timezone information") and returns aware UTC on read. These pin the
+# behaviors that broke on Render: every login/scan write, comparisons
+# against rows written before the fix (stored naive), and user-entered
+# stream times that must stay exactly as typed.
+
+def test_as_utc_normalizes_naive_and_offset_datetimes():
+    from datetime import datetime, timedelta, timezone
+    from app.timeutil import as_utc, utc_now
+
+    assert utc_now().utcoffset() == timedelta(0)
+    naive = datetime(2026, 9, 1, 12, 0)
+    assert as_utc(naive) == datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    eastern = datetime(2026, 9, 1, 8, 0, tzinfo=timezone(timedelta(hours=-4)))
+    assert as_utc(eastern) == datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def test_floor_login_writes_timezone_aware_session(floor_pin_hash_set, engine):
+    from datetime import timedelta
+    from app.models import FloorSession
+
+    resp = floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": TEST_FLOOR_PIN})
+    assert resp.status_code == 200, resp.text
+    with Session(engine) as session:
+        floor_session = session.exec(select(FloorSession)).one()
+        assert floor_session.created_at.utcoffset() == timedelta(0)
+        assert floor_session.expires_at > floor_session.created_at
+    assert floor_pin_hash_set.get("/api/wall-sets").status_code == 200
+
+
+def test_legacy_naive_rows_compare_without_crashing(floor_pin_hash_set, engine):
+    """Rows written before the fix hold naive UTC in the database. Expiry
+    checks and PIN backoff math must treat them as UTC -- not raise
+    TypeError comparing naive against aware."""
+    from sqlalchemy import text
+
+    with Session(engine) as session:
+        session.exec(text(
+            "INSERT INTO floorsession (token, created_at, expires_at) "
+            "VALUES ('legacy-expired', '2020-01-01 00:00:00.000000', '2020-01-02 00:00:00.000000')"))
+        session.exec(text(
+            "INSERT INTO pinattempt (ip_address, failure_count, last_attempt_at) "
+            "VALUES ('testclient', 1, '2020-01-01 00:00:00.000000')"))
+        session.commit()
+
+    floor_pin_hash_set.cookies.set("floor_session", "legacy-expired")
+    assert floor_pin_hash_set.get("/api/wall-sets").status_code == 401  # expired, not a 500
+
+    # The old failed attempt is long past its backoff window.
+    resp = floor_pin_hash_set.post("/api/auth/floor-login", json={"pin": TEST_FLOOR_PIN})
+    assert resp.status_code == 200, resp.text
+
+
+def test_admin_login_and_session_check_work_with_aware_timestamps(client, admin_password, engine):
+    from datetime import timedelta
+    from app.models import AdminSession
+
+    assert client.post("/api/auth/login", json={"password": admin_password}).status_code == 200
+    assert client.get("/api/auth/me").status_code == 200
+    with Session(engine) as session:
+        assert session.exec(select(AdminSession)).one().expires_at.utcoffset() == timedelta(0)
+
+
+def test_financial_stream_times_round_trip_exactly_as_entered(admin_client):
+    """Typed into a datetime-local input: no zone, no conversion. The
+    frontend displays these back as entered, so they must not come back
+    shifted or with a UTC offset attached."""
+    wall_set, t1, _ = _make_wall_set_with_items(admin_client)
+    body = {"streamer": "Binit", "stream_started_at": "2026-09-01T18:00", "stream_ended_at": "2026-09-01T20:30",
+            "revenue": 500.0, "fees": 25.0, "bid_average": 2.5, "giveaway_squishy_type_id": None,
+            "giveaway_quantity": None, "notes": None, "item_costs": []}
+    resp = admin_client.put(f"/api/wall-sets/{wall_set['id']}/financials", json=body)
+    assert resp.status_code == 200, resp.text
+    got = admin_client.get(f"/api/wall-sets/{wall_set['id']}/financials").json()
+    assert got["stream_started_at"] == "2026-09-01T18:00:00"
+    assert got["stream_ended_at"] == "2026-09-01T20:30:00"
+    assert admin_client.get("/api/financials").json()[0]["stream_started_at"] == "2026-09-01T18:00:00"
+
+
+def test_scan_to_completion_records_aware_timestamps(client, engine):
+    """Scan writes (ScanEvent.scanned_at, Shipment.completed_at) were the
+    other production crash site."""
+    from datetime import timedelta
+    from app.models import ScanEvent
+
+    wall_set = client.post("/api/wall-sets", json={"label": "tz test", "items": []}).json()
+    squishy = client.post("/api/squishy-types", json={"name": "TZ Squishy"}).json()
+    with Session(engine) as session:
+        shipment = Shipment(wall_set_id=wall_set["id"], tracking_number="9999000000000000000001", order_ids="o1")
+        session.add(shipment); session.flush()
+        session.add(ShipmentRequirement(shipment_id=shipment.id, squishy_type_id=squishy["id"], quantity_required=1))
+        session.commit()
+        shipment_id = shipment.id
+
+    resp = client.post(f"/api/wall-sets/{wall_set['id']}/scan", json={"barcode": squishy["internal_code"]})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "complete"
+    with Session(engine) as session:
+        assert session.get(Shipment, shipment_id).completed_at.utcoffset() == timedelta(0)
+        assert session.exec(select(ScanEvent)).one().scanned_at.utcoffset() == timedelta(0)
 
 
 # --- squishy type catalog ---------------------------------------------------

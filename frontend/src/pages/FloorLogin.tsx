@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { floorLogin } from "../api";
+import { ApiError, floorLogin } from "../api";
 
 interface FloorLoginProps {
   onUnlocked: () => void;
@@ -22,16 +22,26 @@ export default function FloorLogin({ onUnlocked }: FloorLoginProps) {
       onUnlocked();
       navigate("/");
     } catch (e) {
-      // A real server misconfiguration (FLOOR_PIN_HASH never set) must
-      // say so, not masquerade as a wrong PIN -- otherwise a floor
-      // worker has no way to tell "I mistyped" from "this deployment was
-      // never finished being set up" apart. Wrong PIN vs. rejected-by-
-      // backoff still share one message deliberately -- see
-      // verify_floor_pin in app/auth.py.
-      if (e instanceof Error && e.message.startsWith("500")) {
-        setError("Floor PIN isn't configured on this server yet -- contact your admin.");
-      } else {
+      // Four different situations, four different messages -- a floor
+      // worker has to be able to tell "I mistyped" from "this deployment
+      // isn't set up" from "the server crashed" from "no connection".
+      // "Not configured" is only claimed when the server explicitly says
+      // so (get_floor_pin_hash in app/auth.py); any other 500 is a real
+      // crash, which was once shown as a setup mistake and sent everyone
+      // looking in the wrong place. Wrong PIN vs. rejected-by-backoff
+      // still share one message deliberately -- see verify_floor_pin.
+      if (e instanceof ApiError && e.status < 500) {
         setError("Incorrect PIN.");
+      } else if (
+        e instanceof ApiError &&
+        typeof e.detail === "string" &&
+        e.detail.startsWith("FLOOR_PIN_HASH is not set")
+      ) {
+        setError("Floor PIN isn't configured on this server yet -- contact your admin.");
+      } else if (e instanceof ApiError) {
+        setError(`Something went wrong on the server (error ${e.status}). Try again, and tell your admin if it keeps happening.`);
+      } else {
+        setError("Couldn't reach the server. Check the connection and try again.");
       }
     } finally {
       setSubmitting(false);

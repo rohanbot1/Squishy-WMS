@@ -1,4 +1,7 @@
-sqlmodel
+# Pinned: 0.0.47 changed datetime columns to a UTC type that rejects naive
+# datetimes (see app/timeutil.py). An unpinned install let Render and local
+# dev silently run different versions -- keep them identical.
+sqlmodel==0.0.47
 python-barcode
 reportlab
 pymupdf

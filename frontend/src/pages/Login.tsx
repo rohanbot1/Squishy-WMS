@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { login } from "../api";
+import { ApiError, login } from "../api";
 
 interface LoginProps {
   onLoggedIn: () => void;
@@ -21,8 +21,22 @@ export default function Login({ onLoggedIn }: LoginProps) {
       await login(password);
       onLoggedIn();
       navigate("/");
-    } catch {
-      setError("Incorrect password.");
+    } catch (e) {
+      // Same distinctions as FloorLogin: a server crash or missing config
+      // must never read as a mistyped password.
+      if (e instanceof ApiError && e.status < 500) {
+        setError("Incorrect password.");
+      } else if (
+        e instanceof ApiError &&
+        typeof e.detail === "string" &&
+        e.detail.startsWith("ADMIN_PASSWORD_HASH is not set")
+      ) {
+        setError("Admin password isn't configured on this server yet -- see scripts/set_admin_password.py.");
+      } else if (e instanceof ApiError) {
+        setError(`Something went wrong on the server (error ${e.status}). Try again, and check the server log if it keeps happening.`);
+      } else {
+        setError("Couldn't reach the server. Check the connection and try again.");
+      }
     } finally {
       setSubmitting(false);
     }

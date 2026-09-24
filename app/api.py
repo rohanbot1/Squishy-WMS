@@ -36,6 +36,7 @@ from .models import (
     SquishyType, WallSet, WallSetItem,
 )
 from .order_ingest import attach_label_pages, parse_csv_into_shipments
+from .timeutil import utc_now
 
 # Explicit path, not cwd-based discovery -- uvicorn can be launched from
 # anywhere (a different terminal cwd, a process manager, etc.) and this
@@ -419,7 +420,7 @@ async def upload_orders_new_wall_set(
     manifest-quantity reader (Financials' item-cost table, the per-wall-set
     label sheet) already treats an empty WallSetItem list as "nothing to
     show", not an error, so this needs no other changes."""
-    label = f"Upload {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+    label = f"Upload {utc_now().strftime('%Y-%m-%d %H:%M:%S')} UTC"
     wall_set = WallSet(label=label)
     session.add(wall_set)
     session.flush()  # get wall_set.id before storage paths are computed
@@ -584,7 +585,7 @@ def upsert_financials(
     record.giveaway_squishy_type_id = body.giveaway_squishy_type_id
     record.giveaway_quantity = body.giveaway_quantity
     record.notes = body.notes
-    record.updated_at = datetime.utcnow()
+    record.updated_at = utc_now()
 
     session.add(record)
     session.flush()  # ensure record.id exists before touching item costs

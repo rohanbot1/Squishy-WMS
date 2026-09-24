@@ -12,12 +12,12 @@ e.g. an order for 2x the same squishy) to zero out the list. Same code
 path either way.
 """
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Optional
 
 from sqlmodel import Session, select
 
 from .models import Shipment, ShipmentRequirement, ScanEvent, SquishyType
+from .timeutil import utc_now
 
 
 @dataclass
@@ -109,7 +109,7 @@ def scan_item(session: Session, wall_set_id: int, squishy_type_id: int) -> ScanR
 
     if shipment_complete:
         shipment.is_complete = True
-        shipment.completed_at = datetime.utcnow()
+        shipment.completed_at = utc_now()
     elif shipment.bin_number is None:
         # Only assign a bin when the shipment is genuinely going to sit and
         # wait for more scans -- a single-item order that completes on this
